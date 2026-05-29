@@ -1,0 +1,275 @@
+export const frontmatter = {
+  title: "Capstone: AI-Powered Full-Stack Service",
+  subtitle: "Production-Grade App Combining Web · DB · DevOps · AI",
+  chapter: 20,
+  slug: "capstone",
+  duration: "10 hours",
+  project: "CodeForge — AI Code Review Platform",
+  status: "available",
+  description: "Synthesize all skills from 20 chapters to build a production-grade Rust full-stack + AI platform featuring RAG intelligent search, AI code review, real-time notifications, complete CI/CD, Kubernetes deployment, and observability.",
+  prev: "ai-ops",
+  next: null,
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Project Vision
+
+**CodeForge** is an AI-powered code review platform that integrates all core capabilities from this course:
+
+- After submitting code, AI automatically reviews security vulnerabilities, performance issues, and code style
+- RAG system retrieves historical review records to prevent recurring mistakes
+- Real-time WebSocket push for review progress
+- Complete user system, permission control, and team collaboration
+- One-click Kubernetes deployment, Grafana monitoring, and auto-scaling
+
+## Full Tech Stack
+
+```
+CodeForge Tech Stack
+│
+├── Frontend: Next.js 15
+│   ├── React Server Components
+│   ├── TanStack Query (data fetching)
+│   ├── WebSocket (real-time push)
+│   └── Monaco Editor (code editor)
+│
+├── Backend: Rust + Axum
+│   ├── REST API (CRUD)
+│   ├── WebSocket (real-time notifications)
+│   ├── AI Gateway (multi-model routing)
+│   └── Background task queue (tokio)
+│
+├── Data Layer
+│   ├── PostgreSQL (primary DB + pgvector vector storage)
+│   ├── Redis (cache + sessions + task queue)
+│   └── S3/R2 (code file storage)
+│
+├── AI
+│   ├── Embedding model (code vectorization)
+│   ├── LLM (GPT-4o / Claude 3.5 code review)
+│   └── RAG (Retrieval-Augmented Generation)
+│
+└── DevOps
+    ├── GitHub Actions CI/CD
+    ├── Kubernetes + Helm
+    ├── Prometheus + Grafana
+    └── OpenTelemetry distributed tracing
+```
+
+## Core Feature: RAG Code Review
+
+````rust
+// crates/review/src/rag.rs
+pub struct CodeReviewEngine {
+    llm: Arc<dyn LlmClient>,
+    embedder: Arc<dyn EmbeddingClient>,
+    db: PgPool,
+}
+
+impl CodeReviewEngine {
+    pub async fn review(&self, submission: &CodeSubmission) -> ReviewResult {
+        // 1. Vectorize the code
+        let code_embedding = self.embedder
+            .embed(&submission.code)
+            .await?;
+
+        // 2. Retrieve similar historical review records (RAG)
+        let similar_reviews = sqlx::query_as!(
+            SimilarReview,
+            r#"
+            SELECT content, score, review_type,
+                   1 - (embedding <=> $1::vector) as similarity
+            FROM code_reviews
+            WHERE 1 - (embedding <=> $1::vector) > 0.7
+            ORDER BY similarity DESC
+            LIMIT 5
+            "#,
+            &code_embedding as &[f32]
+        )
+        .fetch_all(&self.db)
+        .await?;
+
+        // 3. Build RAG prompt
+        let context = similar_reviews
+            .iter()
+            .map(|r| format!("Historical case (similarity {:.0}%):\n{}", r.similarity * 100.0, r.content))
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+
+        let prompt = format!(r#"
+You are a professional Rust code reviewer. Use the following historical review cases as reference:
+
+{context}
+
+Please review the following code, focusing on:
+1. Memory safety (ownership, borrowing, lifetimes)
+2. Concurrency safety (data races, deadlock risks)
+3. Error handling (whether errors are propagated correctly)
+4. Performance issues (unnecessary clones, blocking calls)
+
+Code:
+```rust
+{code}
+```
+        "#, context = context, code = submission.code);
+
+        // 4. Stream LLM call
+        let review_stream = self.llm.stream_chat(vec![
+            Message::system("You are a professional Rust code reviewer"),
+            Message::user(&prompt),
+        ]).await?;
+
+        // 5. Store review result and embedding for future RAG retrieval
+        let review_text = collect_stream(review_stream).await;
+        self.store_review(&submission.code, &review_text, &code_embedding).await?;
+
+        ReviewResult { content: review_text, similar_cases: similar_reviews }
+    }
+}
+````
+
+## Real-Time Progress Push
+
+```rust
+// WebSocket push for review progress
+#[derive(Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum ReviewEvent {
+    Started { submission_id: Uuid },
+    Analyzing { step: &'static str, progress: u8 },
+    ChunkReceived { content: String },
+    Completed { review_id: Uuid, score: f32 },
+    Failed { error: String },
+}
+
+pub async fn process_review_job(
+    submission: CodeSubmission,
+    ws_tx: broadcast::Sender<ReviewEvent>,
+    engine: Arc<CodeReviewEngine>,
+) {
+    let _ = ws_tx.send(ReviewEvent::Started { submission_id: submission.id });
+
+    let _ = ws_tx.send(ReviewEvent::Analyzing {
+        step: "retrieving similar cases",
+        progress: 20,
+    });
+
+    // ... continuously push progress during review ...
+
+    match engine.review(&submission).await {
+        Ok(result) => {
+            let _ = ws_tx.send(ReviewEvent::Completed {
+                review_id: result.id,
+                score: result.score,
+            });
+        }
+        Err(e) => {
+            let _ = ws_tx.send(ReviewEvent::Failed { error: e.to_string() });
+        }
+    }
+}
+```
+
+## CI/CD Full Pipeline
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: test }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2   # cache build artifacts
+      - run: cargo test --workspace
+
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rolling deploy to K8s
+        run: |
+          kubectl set image deployment/codeforge-api \
+            api=ghcr.io/${{ github.repository }}:${{ github.sha }}
+          kubectl rollout status deployment/codeforge-api --timeout=5m
+```
+
+## Pre-Launch Checklist
+
+Confirm all items below are complete before going live:
+
+```
+✅ Language Fundamentals
+  - Ownership rules and borrow checker pass
+  - Error handling: all Results correctly propagated, no unwrap() in production paths
+
+✅ Engineering Quality
+  - cargo clippy zero warnings
+  - cargo test --workspace all passing
+  - Integration tests cover core API paths
+
+✅ Security
+  - Passwords hashed with Argon2id (never store plaintext)
+  - JWT uses strong random secret, rotated regularly
+  - SQL parameterized queries (never string-concatenate SQL)
+  - Rate limiting covers auth routes
+  - Dependency audit: cargo audit zero high-severity vulnerabilities
+
+✅ Operations Ready
+  - /health and /ready endpoints implemented
+  - Prometheus metrics exposed
+  - Structured logging (JSON format, includes trace_id)
+  - Graceful shutdown (SIGTERM handling)
+  - Resource limits (CPU/memory requests/limits)
+
+✅ AI Systems
+  - LLM API keys injected via K8s Secrets
+  - Model calls have timeout and retry logic
+  - Token cost tracking enabled
+  - RAG vector index pre-warmed
+```
+
+<Callout type="insight">
+This checklist was distilled from production incidents. Every item maps to a real failure scenario: forgetting rate limiting led to account hijacking and skyrocketing bills; forgetting /ready caused Kubernetes to route traffic to uninitialized instances; SQL concatenation led to injection attacks. Turn this into your team's PR merge gate.
+</Callout>
+
+<VideoPlaceholder
+  title="CodeForge Full Demo"
+  description="10-hour capstone recording: the complete journey from an empty workspace to a live deployment. RAG code review, WebSocket real-time push, GitHub Actions automated deployment, and Kubernetes monitoring dashboards — all captured end to end."
+/>
+
+<ProjectCard
+  title="CodeForge — AI Code Review Platform"
+  description="The ultimate capstone project spanning all 20 chapters. Rust Axum backend + Next.js frontend + PostgreSQL + pgvector RAG + LLM code review + WebSocket real-time push + GitHub Actions CI/CD + Kubernetes deployment + Prometheus + Grafana monitoring. This is your Rust full-stack engineer graduation project."
+  skills={["Full-Stack Architecture", "RAG", "WebSocket", "K8s", "CI/CD", "Monitoring", "AI Integration"]}
+  startCommand="git clone https://github.com/rustforge/codeforge && cd codeforge && make setup"
+/>

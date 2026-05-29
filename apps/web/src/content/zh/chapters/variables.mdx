@@ -1,0 +1,159 @@
+export const frontmatter = {
+  title: "变量、类型与函数",
+  subtitle: "Rust 类型系统深度解析",
+  chapter: 2,
+  slug: "variables",
+  duration: "3 小时",
+  project: "成绩计算器 CLI",
+  status: "available",
+  description: "整数类型、浮点数、字符串两种形式、元组与数组、函数与表达式——建立 Rust 比 TypeScript 更严格的类型系统认知。",
+  prev: "basics",
+  next: "ownership",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 类型系统：比 TypeScript 更深一层
+
+TypeScript 的类型在编译后消失，运行时还是 JavaScript，类型只是辅助工具。Rust 的类型是语言核心——影响内存布局、函数调用约定、性能特征，类型错误往往是内存安全问题的早期警告。
+
+---
+
+## 整数类型
+
+Rust 的整数类型按位数分为 8/16/32/64/128 位，每种分有符号（`i`）和无符号（`u`）：
+
+<CompareBlock
+  concept="数字类型"
+  jsLabel="TypeScript"
+  rustLabel="Rust"
+  js={`// TypeScript：所有数字都是 f64
+let count: number = 42;
+let price: number = 9.99;
+let big: bigint = 9007199254740993n;`}
+  rust={`// Rust：选择合适的类型
+let count: i32 = 42;        // 32 位有符号整数
+let price: f64 = 9.99;      // 64 位浮点数
+let age: u8 = 25;           // 0-255
+let big: i64 = 9_007_199_254_740_993; // 下划线分隔`}
+  insight="Rust 要求你明确选择类型。这不是繁琐，是在告诉编译器内存布局，让它做更好的优化和更严格的检查。"
+/>
+
+`isize` 和 `usize` 大小等于机器字长（64 位系统上是 64 位），专门用于数组索引。
+
+---
+
+## 字符串：两种形式
+
+这是前端工程师最容易困惑的地方。
+
+<CompareBlock
+  concept="字符串"
+  jsLabel="JavaScript"
+  rustLabel="Rust"
+  js={`// JS：字符串只有一种
+const hello = "hello";        // 可变可传递
+const world = hello + " world";
+console.log(world.length);`}
+  rust={`// Rust：字符串有两种形式
+let hello: &str = "hello";    // 字符串切片：不可变引用，在只读段
+let world: String = String::from("hello world"); // 堆分配，可修改
+
+// &str 转 String
+let owned = hello.to_string();
+
+// String 转 &str（自动解引用）
+let slice: &str = &world;`}
+  insight="&str 是视图（借用），String 是所有者（堆上）。函数参数尽量用 &str，更灵活；需要存储或修改时用 String。"
+/>
+
+---
+
+## 变量遮蔽（Shadowing）
+
+Rust 独特的特性：用同名 `let` 重新绑定变量，可以改变类型：
+
+```rust
+let x = 5;
+let x = x + 1;          // 遮蔽，x 是 6
+let x = x.to_string();  // 遮蔽，x 是 String 类型
+println!("{}", x);       // "6"
+```
+
+这和 JavaScript 的 `let` 重新赋值不同——Rust 的遮蔽创建了新变量，可以改变类型，旧变量不可变规则依然生效。
+
+---
+
+## 元组与数组
+
+```rust
+// 元组：固定长度，可以不同类型
+let tup: (i32, f64, bool) = (500, 6.4, true);
+let (x, y, z) = tup;     // 解构
+println!("{}", tup.0);    // 点语法访问
+
+// 数组：固定长度，相同类型（栈上）
+let a: [i32; 5] = [1, 2, 3, 4, 5];
+println!("{}", a[0]);     // 0 → panic if out of bounds
+
+// Vec：动态大小（堆上），类似 JS Array
+let mut v = vec![1, 2, 3];
+v.push(4);
+println!("{}", v[3]);     // 4
+```
+
+---
+
+## 函数与表达式
+
+Rust 里，代码块 `{}` 是表达式，最后一行无分号就是返回值：
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b  // 没有 return，没有分号——这是返回值
+}
+
+// if 也是表达式
+let result = if x > 0 { "正数" } else { "非正数" };
+
+// 块表达式
+let y = {
+    let x = 3;
+    x + 1  // y = 4
+};
+```
+
+<Callout type="tip">
+  **加了分号就是语句，没有值**。如果你函数返回了 `()` 而你期望有值，检查最后一行是否不小心加了分号。
+</Callout>
+
+---
+
+## 实战项目：成绩计算器
+
+<ProjectCard
+  title="成绩计算器 CLI"
+  description="解析命令行输入的分数列表，计算平均分，用 match 映射成绩等级，格式化输出。"
+  skills={["整数/浮点数类型转换", "Vec 集合", "match 模式匹配", "函数组合", "命令行参数"]}
+  command="cargo new grade-calc && cd grade-calc"
+  difficulty="初级"
+  estimatedTime="30 分钟"
+/>
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="Rust 变量与类型系统"
+  duration="20 分钟精讲"
+  description="整数类型选择、字符串两种形式、表达式 vs 语句的核心区别。"
+  src="/videos/ch02-variables.mp4"
+  subtitles="/subtitles/ch02-variables.vtt"
+/>

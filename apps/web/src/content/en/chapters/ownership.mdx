@@ -1,0 +1,322 @@
+export const frontmatter = {
+  title: "Ownership and Borrowing",
+  subtitle: "Rust's Core Memory Management System",
+  chapter: 3,
+  slug: "ownership",
+  duration: "4 hours",
+  project: "String Processor",
+  status: "available",
+  description: "Move semantics, borrowing rules, lifetimes — understand how Rust guarantees memory safety without a GC.",
+  prev: "variables",
+  next: "structs",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+import { OwnershipDiagram } from "@/components/animations/OwnershipDiagram";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Why Ownership?
+
+JavaScript relies on a garbage collector (GC) to manage memory. GC is convenient, but it comes with hidden costs:
+
+- **Pauses**: The program halts while GC runs (even if just milliseconds)
+- **Non-determinism**: You never know when memory will be freed
+- **Overhead**: GC needs extra memory to track object references
+
+C/C++ manages memory manually — peak performance, but prone to: dangling pointers, double frees, memory leaks.
+
+Rust's answer: **compile-time ownership system**. Memory management decisions are made at compile time — zero runtime overhead, no GC, no unsafety.
+
+---
+
+## Three Rules of Ownership
+
+These three rules are the foundation of Rust's entire memory system. All complex behavior derives from them:
+
+```
+1. Each value has exactly one "owner" (a variable)
+2. There can only be one owner at a time
+3. When the owner goes out of scope, the value is immediately dropped
+```
+
+<Callout type="insight">
+  Rule 3 is the key. Why Rust doesn't need GC: **scope ends = memory freed**. The compiler automatically inserts `drop()` calls — more precise than GC, safer than manual `free()`.
+</Callout>
+
+---
+
+## Interactive Demo: Visualizing Ownership Transfer
+
+The animation below shows the four core steps — click to explore step by step:
+
+<OwnershipDiagram />
+
+---
+
+## Move: Transferring Ownership
+
+<CompareBlock
+  concept="Assignment Semantics"
+  jsLabel="JavaScript (reference semantics)"
+  rustLabel="Rust (move semantics)"
+  js={`// JS: assignment copies the reference; both point to the same object
+let s1 = { value: "hello" };
+let s2 = s1;          // s1 and s2 are both valid
+
+console.log(s1.value); // "hello" ✓
+console.log(s2.value); // "hello" ✓
+
+// modifying s2 also affects s1 (shared reference)
+s2.value = "world";
+console.log(s1.value); // "world" — it changed!`}
+  rust={`// Rust: assignment transfers ownership; s1 becomes invalid
+let s1 = String::from("hello");
+let s2 = s1;          // ownership moves from s1 to s2
+
+// println!("{s1}"); // ✗ compile error: s1 has been moved
+println!("{s2}");    // ✓
+
+// benefit: no two variables point to the same data
+// ownership is always clear, no double-free on drop`}
+  insight="JS reference semantics are convenient but hide shared state. Rust's move semantics make data ownership crystal clear, eliminating an entire class of bugs."
+/>
+
+### Copy Types: Small Data Is Copied Directly
+
+Not all types Move. **Simple stack-allocated types** implement the `Copy` trait and are copied on assignment:
+
+```rust
+// i32, f64, bool, char, etc. implement Copy
+let x = 5;
+let y = x; // copy, not move
+
+println!("{x}"); // ✓ x is still valid
+println!("{y}"); // ✓
+
+// rule: a type is Copy only if all of its parts are Copy
+// String is not Copy (heap-allocated, variable size)
+// i32 is Copy (fixed 4 bytes, lives on the stack)
+```
+
+---
+
+## Functions and Ownership
+
+```rust
+fn main() {
+    let s = String::from("hello");
+    takes_ownership(s);      // ownership of s moves into the function
+    // println!("{s}");      // ✗ s has been moved
+
+    let x = 5;
+    makes_copy(x);           // i32 is Copy, x is still valid
+    println!("{x}");         // ✓
+
+    // solution: return ownership from the function
+    let s2 = gives_ownership();  // take ownership of the return value
+    println!("{s2}");
+}
+
+fn takes_ownership(s: String) {
+    println!("{s}");
+} // s is dropped here
+
+fn makes_copy(n: i32) {
+    println!("{n}");
+} // n was copied, the original is unaffected
+
+fn gives_ownership() -> String {
+    String::from("yours now")
+}
+```
+
+<Callout type="tip">
+  Moving ownership into a function and then returning it back every time is tedious. Rust's solution is **borrowing**.
+</Callout>
+
+---
+
+## Borrowing: References Without Transferring Ownership
+
+```rust
+fn main() {
+    let s = String::from("hello");
+
+    // the & symbol creates a borrow (a reference)
+    let len = calculate_length(&s); // borrow s, don't move it
+
+    println!("the length of '{s}' is {len}"); // s is still valid ✓
+}
+
+// the parameter type is &String, meaning a borrow
+fn calculate_length(s: &String) -> usize {
+    s.len()
+} // s is a borrow; it is returned automatically at the end of the function, not dropped
+```
+
+### Borrowing Rules
+
+Rust enforces two rules at compile time to eliminate all data races:
+
+```
+At any given time, for the same data, choose one:
+  ● Any number of immutable borrows (&T)
+  ● Exactly one mutable borrow (&mut T)
+Both cannot exist at the same time
+```
+
+```rust
+fn main() {
+    let mut s = String::from("hello");
+
+    // immutable borrows: multiple are allowed simultaneously
+    let r1 = &s;
+    let r2 = &s;
+    println!("{r1} and {r2}"); // ✓
+
+    // r1, r2 are last used on the line above, so the borrows end here
+    // (NLL: Non-Lexical Lifetimes — the compiler is smart enough)
+
+    // mutable borrow: only one allowed, and cannot coexist with immutable borrows
+    let r3 = &mut s;
+    r3.push_str(", world");
+    println!("{r3}"); // ✓
+}
+```
+
+<CompareBlock
+  concept="Concurrency Safety"
+  jsLabel="JavaScript (single-threaded, no races but no real parallelism)"
+  rustLabel="Rust (multi-threaded, compile-time guarantee of no data races)"
+  js={`// JS is single-threaded, so there are no true data races
+// but shared state in async code is still easy to get wrong
+let data = [];
+async function writeA() { data.push("a"); }
+async function writeB() { data.push("b"); }
+// who runs first? depends on the runtime scheduler — non-deterministic`}
+  rust={`// Rust: borrowing rules apply across threads too
+// the compiler guarantees no simultaneous reads and writes to the same data
+use std::thread;
+let mut data = vec![1, 2, 3];
+
+// this won't compile — the compiler rejects potential data races
+// thread::spawn(|| data.push(4)); // ✗
+// println!("{:?}", data);         // ✗
+
+// correct approach: Arc<Mutex<T>> or channels`}
+  insight="Rust's borrowing rules are the foundation of thread safety. The Send and Sync traits guarantee safe cross-thread data sharing at compile time."
+/>
+
+---
+
+## Slices: Borrowing Part of a Collection
+
+```rust
+fn first_word(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b' ' {
+            return &s[..i]; // return the slice before the first space
+        }
+    }
+    &s[..] // the whole string
+}
+
+fn main() {
+    let s = String::from("hello world");
+    let word = first_word(&s); // borrow a part of s
+
+    // s.clear(); // ✗ compile error: s is mutably borrowed while word is still in use
+    println!("first word: {word}"); // ✓
+}
+```
+
+<Callout type="insight">
+  `&str` (string slice) and `String` are the most commonly confused types for Rust beginners. A simple rule: `String` is an owned, heap-allocated string; `&str` is a borrowed view into string data — it can be a borrow of a `String` or a string literal.
+</Callout>
+
+---
+
+## Project: Memory-Safe String Processor
+
+<ProjectCard
+  title="Memory-Safe String Processor"
+  description="Practice with String, &str, and Vec<String> to master ownership and borrowing in real-world code."
+  skills={["String vs &str", "Vec ownership", "Function parameter borrowing", "Iterators and closures"]}
+  command="cargo new string-processor && cd string-processor"
+  difficulty="Beginner"
+  estimatedTime="45 minutes"
+/>
+
+```rust
+// src/main.rs — complete string processor
+fn main() {
+    // a collection of owned strings
+    let mut words: Vec<String> = Vec::new();
+
+    // push moves ownership into the Vec
+    words.push(String::from("hello"));
+    words.push(String::from("world"));
+    words.push(String::from("rust"));
+
+    // borrow the Vec for a read-only operation
+    let total_chars = count_chars(&words);
+    println!("total characters: {total_chars}");
+
+    // borrow the Vec and return new data (original Vec unchanged)
+    let upper = to_uppercase(&words);
+    println!("uppercase: {upper:?}");
+
+    // mutable borrow: modify in place
+    filter_short(&mut words, 4);
+    println!("after filtering: {words:?}");
+
+    // words is automatically dropped when main ends
+}
+
+// &Vec<String> — immutable borrow
+fn count_chars(words: &Vec<String>) -> usize {
+    words.iter().map(|w| w.len()).sum()
+}
+
+// returns a new Vec, does not modify the original
+fn to_uppercase(words: &Vec<String>) -> Vec<String> {
+    words.iter().map(|w| w.to_uppercase()).collect()
+}
+
+// &mut Vec — mutable borrow, modifies in place
+fn filter_short(words: &mut Vec<String>, min_len: usize) {
+    words.retain(|w| w.len() >= min_len);
+}
+```
+
+---
+
+## Video Walkthrough
+
+<VideoPlaceholder
+  title="Ownership and Borrowing: Memory Model Visualization"
+  duration="49-second deep dive"
+  description="Three rules, Move, borrowing — narrated by Shelley."
+  src="/videos/ch02-ownership.mp4"
+  subtitles="/subtitles/ch02-ownership.vtt"
+/>
+
+---
+
+## Chapter Summary
+
+You've learned:
+
+- ✓ Three rules of ownership
+- ✓ Move vs Copy semantics
+- ✓ Borrowing (`&T` / `&mut T`) and borrowing rules
+- ✓ Ownership in function parameters and return values
+- ✓ String slices `&str`
+
+Next chapter: [Async and Concurrency](/chapter/async) — Rust's approach to `async/await`, and how ownership extends to multi-threading.

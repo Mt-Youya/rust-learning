@@ -1,0 +1,209 @@
+export const frontmatter = {
+  title: "CLI Tools and WebAssembly",
+  subtitle: "clap · wasm-pack · Cross-platform Compilation",
+  chapter: 11,
+  slug: "cli",
+  duration: "3 hours",
+  project: "Markdown Parser (CLI + WASM Dual Publishing)",
+  status: "available",
+  description: "Build professional CLI tools with clap, compile to WebAssembly with wasm-pack — run the same Rust code in the terminal and browser, with performance far exceeding pure JavaScript implementations.",
+  prev: "testing",
+  next: "web-backend",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Building a CLI with clap
+
+`clap` is the most mature CLI framework in the Rust ecosystem, analogous to Node.js's `commander` or `yargs`.
+
+```toml
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+```
+
+```rust
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "mdtool", about = "Markdown processing tool", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Convert Markdown to HTML
+    Convert {
+        /// Input file path
+        #[arg(short, long)]
+        input: std::path::PathBuf,
+
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+    /// Extract all headings
+    Headings {
+        /// Input file
+        file: std::path::PathBuf,
+
+        /// Maximum heading level
+        #[arg(short, long, default_value = "6")]
+        level: u8,
+    },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Convert { input, output } => { /* ... */ }
+        Commands::Headings { file, level } => { /* ... */ }
+    }
+}
+```
+
+<Callout type="insight">
+clap's `derive` macro **automatically generates** argument parsing code, `--help` documentation, and error messages from structs and enums. The type system guarantees correct argument types — no more manual string parsing.
+</Callout>
+
+## Progress Bars and Terminal Styling
+
+```rust
+use indicatif::{ProgressBar, ProgressStyle};
+use console::style;
+
+let pb = ProgressBar::new(100);
+pb.set_style(ProgressStyle::default_bar()
+    .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+    .unwrap());
+
+for i in 0..100 {
+    pb.inc(1);
+    pb.set_message(format!("processing file {}", i));
+}
+pb.finish_with_message(style("done!").green().to_string());
+```
+
+## WebAssembly: Rust Running in the Browser
+
+### Why Choose Rust for WASM?
+
+- No GC pauses, predictable performance
+- Small binary size (no runtime)
+- Direct memory access, ideal for compute-intensive tasks
+- One codebase, dual publishing as CLI + WASM
+
+### wasm-pack Workflow
+
+```bash
+# install tools
+cargo install wasm-pack
+
+# create a WASM library
+cargo new --lib md-parser
+```
+
+```toml
+# Cargo.toml
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib for WASM, rlib for CLI
+
+[dependencies]
+wasm-bindgen = "0.2"
+pulldown-cmark = "0.10"  # Markdown parser
+```
+
+```rust
+// src/lib.rs
+use wasm_bindgen::prelude::*;
+use pulldown_cmark::{Parser, Options, html};
+
+#[wasm_bindgen]
+pub fn markdown_to_html(input: &str) -> String {
+    let options = Options::all();
+    let parser = Parser::new_ext(input, options);
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+    html_output
+}
+
+#[wasm_bindgen]
+pub fn extract_headings(input: &str, max_level: u8) -> JsValue {
+    // returns JSON data usable from JS
+    let headings: Vec<String> = /* ... */;
+    serde_wasm_bindgen::to_value(&headings).unwrap()
+}
+```
+
+<CompareBlock
+  jsTitle="Calling WASM from JS"
+  rustTitle="Rust WASM Exported Functions"
+  js={`import init, { markdown_to_html } from './md_parser.js';
+
+await init(); // load WASM module
+
+const html = markdown_to_html('# Hello\n\nWorld');
+console.log(html); // <h1>Hello</h1><p>World</p>`}
+  rust={`#[wasm_bindgen]
+pub fn markdown_to_html(input: &str) -> String {
+    // this function is compiled as a WASM export
+    // JS can call it directly, just like a regular JS function
+    let parser = Parser::new(input);
+    let mut out = String::new();
+    html::push_html(&mut out, parser);
+    out
+}`}
+/>
+
+### Compiling and Publishing
+
+```bash
+# compile to WASM + generate JS bindings
+wasm-pack build --target web     # for direct browser use
+wasm-pack build --target bundler # for use with webpack/vite
+wasm-pack build --target nodejs  # for use with Node.js
+
+# generated files are in the pkg/ directory
+# pkg/md_parser_bg.wasm  — compiled binary
+# pkg/md_parser.js       — auto-generated JS glue code
+# pkg/md_parser.d.ts     — TypeScript type definitions
+```
+
+<Callout type="tip">
+The package generated by `wasm-pack build --target bundler` can be published directly to npm and imported in Next.js / Vite projects just like any regular npm package. The type definition file gives TypeScript projects full IntelliSense support.
+</Callout>
+
+### Performance Comparison
+
+```javascript
+// comparing equivalent JS vs WASM implementations in Next.js
+const ITERATIONS = 100_000;
+
+console.time('JS Markdown Parser');
+for (let i = 0; i < ITERATIONS; i++) jsParser(input);
+console.timeEnd('JS Markdown Parser');  // ~2300ms
+
+console.time('Rust WASM Parser');
+for (let i = 0; i < ITERATIONS; i++) wasmParser(input);
+console.timeEnd('Rust WASM Parser');    // ~180ms  (~12x faster)
+```
+
+<VideoPlaceholder
+  title="CLI + WASM Dual Publishing Demo"
+  description="Starting from a single Rust library: first compile it as a CLI tool for local processing, then use wasm-pack to compile it as WASM for use in a Next.js project — demonstrating zero-modification cross-platform capability"
+/>
+
+<ProjectCard
+  title="Markdown Parser (CLI + WASM Dual Publishing)"
+  description="Implement the core Markdown parsing logic with pulldown-cmark, expose a CLI interface via clap (supporting file conversion and heading extraction), and compile it as a WASM module with wasm-pack for browser use and npm publishing."
+  skills={["clap", "wasm-bindgen", "wasm-pack", "pulldown-cmark", "cross-platform compilation"]}
+  startCommand="cargo new --lib md-parser && cd md-parser"
+/>

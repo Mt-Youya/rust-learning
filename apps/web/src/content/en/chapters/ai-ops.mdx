@@ -1,0 +1,269 @@
+export const frontmatter = {
+  title: "AI Ops: Model Serving & MLOps",
+  subtitle: "Inference Serving · GPU Scheduling · Cost Optimization · Traffic Management",
+  chapter: 19,
+  slug: "ai-ops",
+  duration: "4 hours",
+  project: "Production-Grade LLM Inference Gateway",
+  status: "available",
+  description: "Build a high-performance AI inference gateway in Rust: multi-model routing, streaming response proxy, cost tracking, rate limiting, A/B testing, and vLLM integration — making AI services fast, cost-efficient, and manageable.",
+  prev: "ai",
+  next: "capstone",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Why Rust for an AI Gateway?
+
+AI inference services have unique performance requirements:
+
+| Requirement | Challenge | Rust Advantage |
+|-------------|-----------|----------------|
+| Streaming responses (SSE) | Long-lived connections, high concurrency | Zero-cost async, handles tens of thousands of connections effortlessly |
+| Token counting | Required for every request | 10–20x faster than Python |
+| Cost tracking | High-frequency writes | Low-latency atomic operations |
+| Multi-model routing | Complex routing logic | Zero-runtime-overhead typed state machines |
+
+## LLM Inference Gateway Architecture
+
+```
+Client
+  │  POST /v1/chat/completions (OpenAI-compatible API)
+  ▼
+┌─────────────────────────────────────────┐
+│          Rust AI Gateway                 │
+│                                          │
+│  ┌──────────┐  ┌──────────┐  ┌────────┐ │
+│  │ Auth/RateLimit│→│  Route Select  │→│ Cost Track│ │
+│  └──────────┘  └────┬─────┘  └────────┘ │
+│                     │                   │
+│         ┌───────────┼───────────┐        │
+│         ▼           ▼           ▼        │
+│    [OpenAI]    [Anthropic]  [Local vLLM] │
+└─────────────────────────────────────────┘
+```
+
+## Streaming Response Proxy (SSE)
+
+```rust
+use axum::response::Sse;
+use futures::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
+
+pub async fn chat_completions(
+    State(state): State<Arc<GatewayState>>,
+    Json(req): Json<ChatRequest>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    let model = state.router.select_model(&req).await;
+
+    tokio::spawn(async move {
+        let mut stream = model.stream_completion(req).await.unwrap();
+
+        while let Some(chunk) = stream.next().await {
+            let delta = chunk.choices[0].delta.content.as_deref().unwrap_or("");
+
+            // Track token usage
+            state.metrics.record_tokens(delta);
+
+            let data = serde_json::to_string(&chunk).unwrap();
+            let _ = tx.send(Event::default().data(data)).await;
+        }
+
+        let _ = tx.send(Event::default().data("[DONE]")).await;
+    });
+
+    Sse::new(ReceiverStream::new(rx).map(Ok))
+        .keep_alive(KeepAlive::default())
+}
+```
+
+<Callout type="insight">
+SSE (Server-Sent Events) is the standard protocol for LLM streaming output. Tokio's MPSC channel decouples "receiving from upstream" and "sending to the client" into two independent tasks. The bounded channel provides backpressure to prevent memory bloat.
+</Callout>
+
+## Intelligent Routing Strategies
+
+```rust
+#[derive(Clone)]
+pub struct ModelRouter {
+    models: Vec<ModelConfig>,
+    strategy: RoutingStrategy,
+}
+
+#[derive(Clone)]
+pub enum RoutingStrategy {
+    CostOptimized,     // Prefer the cheapest model that can handle the request
+    LatencyOptimized,  // Prefer the fastest-responding model
+    LoadBalanced,      // Round-robin
+    Canary { new_model: String, percentage: u8 }, // Canary deployment
+}
+
+impl ModelRouter {
+    pub async fn select_model(&self, req: &ChatRequest) -> &ModelConfig {
+        match &self.strategy {
+            RoutingStrategy::CostOptimized => {
+                // Estimate cost by input token count, pick cheapest model with sufficient context
+                let token_estimate = count_tokens(&req.messages);
+                self.models.iter()
+                    .filter(|m| m.context_window >= token_estimate)
+                    .min_by_key(|m| m.cost_per_1k_tokens)
+                    .unwrap()
+            }
+            RoutingStrategy::Canary { new_model, percentage } => {
+                // Canary: route `percentage`% of traffic to the new model
+                if rand::random::<u8>() < *percentage * 255 / 100 {
+                    self.models.iter().find(|m| &m.name == new_model).unwrap()
+                } else {
+                    &self.models[0]
+                }
+            }
+            // ...
+        }
+    }
+}
+```
+
+## Token Counting & Cost Tracking
+
+```rust
+use tiktoken_rs::cl100k_base;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+pub struct CostTracker {
+    total_input_tokens: AtomicU64,
+    total_output_tokens: AtomicU64,
+    total_cost_cents: AtomicU64, // Store in cents to avoid floating-point precision issues
+}
+
+impl CostTracker {
+    pub fn record_usage(&self, model: &str, input: u64, output: u64) {
+        let (input_price, output_price) = model_pricing(model);
+
+        self.total_input_tokens.fetch_add(input, Ordering::Relaxed);
+        self.total_output_tokens.fetch_add(output, Ordering::Relaxed);
+
+        let cost = (input * input_price + output * output_price) / 1000;
+        self.total_cost_cents.fetch_add(cost, Ordering::Relaxed);
+    }
+
+    pub fn daily_report(&self) -> CostReport {
+        CostReport {
+            input_tokens: self.total_input_tokens.load(Ordering::Relaxed),
+            output_tokens: self.total_output_tokens.load(Ordering::Relaxed),
+            total_cost_usd: self.total_cost_cents.load(Ordering::Relaxed) as f64 / 100.0,
+        }
+    }
+}
+```
+
+## vLLM Integration: Local Model Serving
+
+```rust
+// vLLM is compatible with the OpenAI API format, enabling seamless switching
+pub struct VllmClient {
+    client: reqwest::Client,
+    base_url: String,
+    model: String,
+}
+
+impl VllmClient {
+    pub async fn stream_completion(&self, req: ChatRequest)
+        -> impl Stream<Item = ChatChunk>
+    {
+        let response = self.client
+            .post(format!("{}/v1/chat/completions", self.base_url))
+            .json(&json!({
+                "model": self.model,
+                "messages": req.messages,
+                "stream": true,
+                "max_tokens": req.max_tokens.unwrap_or(2048),
+            }))
+            .send()
+            .await
+            .unwrap();
+
+        // Parse the SSE stream
+        let stream = response.bytes_stream()
+            .map(|chunk| parse_sse_chunk(chunk.unwrap()));
+
+        stream
+    }
+}
+```
+
+## Prometheus Metrics Monitoring
+
+```rust
+lazy_static::lazy_static! {
+    static ref LLM_REQUEST_DURATION: Histogram = register_histogram!(
+        "llm_request_duration_seconds",
+        "Time to first token (TTFT)",
+        vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+    ).unwrap();
+
+    static ref LLM_TOKENS_TOTAL: CounterVec = register_counter_vec!(
+        "llm_tokens_total",
+        "Total tokens processed",
+        &["model", "type"]  // type: input/output
+    ).unwrap();
+
+    static ref LLM_COST_DOLLARS: CounterVec = register_counter_vec!(
+        "llm_cost_dollars_total",
+        "Total cost in USD",
+        &["model"]
+    ).unwrap();
+}
+```
+
+<Callout type="tip">
+Monitoring **TTFT (Time to First Token)** matters more than total response time — the latency users perceive is when the first token appears. Prometheus Histogram quantiles let you precisely understand your P50/P95/P99 latency distribution.
+</Callout>
+
+## Kubernetes GPU Scheduling
+
+```yaml
+# k8s/vllm-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args:
+          - --model
+          - Qwen/Qwen2.5-7B-Instruct
+          - --tensor-parallel-size
+          - "1"
+        resources:
+          limits:
+            nvidia.com/gpu: 1   # Request 1 GPU
+        env:
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0"
+      nodeSelector:
+        accelerator: nvidia-t4   # Schedule onto GPU nodes
+```
+
+<VideoPlaceholder
+  title="AI Inference Gateway Live Demo"
+  description="Building a multi-model routing gateway: unified interface for OpenAI/Anthropic/local vLLM, streaming response proxy, real-time token cost tracking, and Grafana dashboard showing TTFT distribution"
+/>
+
+<ProjectCard
+  title="Production-Grade LLM Inference Gateway"
+  description="Build an OpenAI-compatible AI gateway: JWT authentication, intelligent multi-model routing (cost/latency optimized), SSE streaming response proxy, token counting and cost tracking, Prometheus metrics exposure, and canary deployment support."
+  skills={["SSE Streaming", "Multi-Model Routing", "Token Counting", "Cost Tracking", "vLLM Integration", "Prometheus"]}
+  startCommand="cargo new ai-gateway && cd ai-gateway"
+/>

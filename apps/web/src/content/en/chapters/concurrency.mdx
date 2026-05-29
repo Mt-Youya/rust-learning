@@ -1,0 +1,199 @@
+export const frontmatter = {
+  title: "Concurrent Programming",
+  subtitle: "Threads · Smart Pointers · async/await · Tokio",
+  chapter: 8,
+  slug: "concurrency",
+  duration: "5 hours",
+  project: "Concurrent Web Crawler",
+  status: "available",
+  description: "OS threads and message passing, Arc/Mutex shared state, the async/await model, and the Tokio runtime — understand how Rust achieves high concurrency without data races.",
+  prev: "collections",
+  next: "modules",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Two Concurrency Models
+
+Rust provides two concurrency models, each suited for different scenarios:
+
+| Model | Use Case | Rust Tools |
+|-------|----------|------------|
+| **OS Threads** | CPU-bound, parallel computation | `std::thread` + `Rayon` |
+| **Async Tasks** | I/O-bound, high-concurrency networking | `async/await` + `Tokio` |
+
+## OS Threads and Message Passing
+
+```rust
+use std::thread;
+use std::sync::mpsc; // multi-producer, single-consumer
+
+let (tx, rx) = mpsc::channel();
+let tx2 = tx.clone(); // multiple senders
+
+thread::spawn(move || {
+    tx.send(String::from("from thread 1")).unwrap();
+});
+
+thread::spawn(move || {
+    tx2.send(String::from("from thread 2")).unwrap();
+});
+
+// receive two messages
+for msg in rx {
+    println!("received: {}", msg);
+}
+```
+
+<Callout type="insight">
+The `move` keyword causes a closure to **take ownership** of variables rather than borrow them. Since a spawned thread has an indeterminate lifetime, the compiler refuses borrows — this is how Rust uses ownership to prevent data races.
+</Callout>
+
+## Smart Pointers: Data on the Heap
+
+### Box\<T\>: Heap Allocation
+
+```rust
+// recursive types with unknown compile-time size must use Box
+enum List {
+    Cons(i32, Box<List>),
+    Nil,
+}
+
+let list = List::Cons(1,
+    Box::new(List::Cons(2,
+        Box::new(List::Nil))));
+```
+
+### Arc\<T\> + Mutex\<T\>: Thread-Safe Shared State
+
+<CompareBlock
+  jsTitle="JavaScript (single-threaded, no locks needed)"
+  rustTitle="Rust (multi-threaded, Arc + Mutex)"
+  js={`// JS is single-threaded, shared state is naturally safe
+let counter = { value: 0 };
+// mutate directly, no sync primitives needed`}
+  rust={`use std::sync::{Arc, Mutex};
+use std::thread;
+
+let counter = Arc::new(Mutex::new(0));
+let mut handles = vec![];
+
+for _ in 0..10 {
+    let counter = Arc::clone(&counter);
+    let handle = thread::spawn(move || {
+        let mut num = counter.lock().unwrap();
+        *num += 1;
+    });
+    handles.push(handle);
+}
+
+for h in handles { h.join().unwrap(); }
+println!("result: {}", *counter.lock().unwrap()); // 10`}
+/>
+
+| Type | Purpose | Thread-Safe |
+|------|---------|-------------|
+| `Rc<T>` | Single-threaded reference counting | ❌ |
+| `Arc<T>` | Multi-threaded reference counting | ✅ |
+| `RefCell<T>` | Single-threaded interior mutability | ❌ |
+| `Mutex<T>` | Multi-threaded mutual exclusion lock | ✅ |
+| `RwLock<T>` | Multi-threaded read-write lock | ✅ |
+
+## async/await: Asynchronous Programming
+
+<CompareBlock
+  jsTitle="JavaScript Promise/async"
+  rustTitle="Rust async/await"
+  js={`async function fetchUser(id) {
+  const res = await fetch(\`/users/\${id}\`);
+  return res.json();
+}
+
+// concurrent execution
+const [u1, u2] = await Promise.all([
+  fetchUser(1), fetchUser(2)
+]);`}
+  rust={`async fn fetch_user(id: u64) -> User {
+    reqwest::get(format!("/users/{id}"))
+        .await.unwrap()
+        .json::<User>()
+        .await.unwrap()
+}
+
+// concurrent execution
+let (u1, u2) = tokio::join!(
+    fetch_user(1),
+    fetch_user(2)
+);`}
+/>
+
+<Callout type="note">
+Rust's `async fn` returns a `Future`, and Futures are **lazy** — they do nothing until driven by a runtime like Tokio. `.await` suspends the current task, allowing the runtime to run other tasks without blocking the thread.
+</Callout>
+
+## Tokio: Async Runtime
+
+```rust
+use tokio::time::{sleep, Duration};
+
+#[tokio::main]
+async fn main() {
+    // spawn an independent task (similar to Promise, but lighter)
+    let handle = tokio::spawn(async {
+        sleep(Duration::from_millis(100)).await;
+        42
+    });
+
+    let result = handle.await.unwrap();
+    println!("task result: {}", result);
+}
+```
+
+### tokio::select!: Waiting on Multiple Futures
+
+```rust
+tokio::select! {
+    result = fetch_from_api() => {
+        println!("API response: {:?}", result);
+    }
+    _ = timeout(Duration::from_secs(5)) => {
+        println!("timed out!");
+    }
+}
+```
+
+## Rayon: Data Parallelism
+
+```rust
+use rayon::prelude::*;
+
+let numbers: Vec<i32> = (0..1_000_000).collect();
+
+// automatically uses all CPU cores
+let sum: i32 = numbers.par_iter()
+    .map(|&x| x * x)
+    .sum();
+```
+
+<Callout type="tip">
+Swapping `.iter()` for `.par_iter()` is all it takes to enable parallelism — Rayon handles work distribution and thread pooling automatically. Use Rayon for CPU-bound batch processing; use Tokio for I/O-bound workloads.
+</Callout>
+
+<VideoPlaceholder
+  title="Concurrent Crawler Build Demo"
+  description="From a single-threaded crawler to a Tokio async concurrent crawler: see how async/await handles massive numbers of concurrent HTTP requests with just a few threads, with a side-by-side performance comparison"
+/>
+
+<ProjectCard
+  title="Concurrent Web Crawler"
+  description="Build an async concurrent web crawler: given a list of URLs, fetch them concurrently using Tokio + reqwest, aggregate results with Arc<Mutex>, and output the title, status code, and response time statistics for each page."
+  skills={["tokio", "async/await", "Arc/Mutex", "reqwest", "concurrency control"]}
+  startCommand="cargo new async-crawler && cd async-crawler"
+/>

@@ -1,0 +1,252 @@
+export const frontmatter = {
+  title: "Hands-on Project 1: Full-Stack Task Management System",
+  subtitle: "Next.js + Axum + PostgreSQL + WebSocket",
+  chapter: 15,
+  slug: "project-fullstack",
+  duration: "8 hours",
+  project: "TaskForge — Real-Time Collaborative Task Management System",
+  status: "available",
+  description: "Combine all skills from the first four stages to build a production-grade full-stack application: Rust Axum backend + Next.js frontend + PostgreSQL database + WebSocket real-time collaboration + JWT authentication + Docker deployment.",
+  prev: "auth",
+  next: "devops",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Project Overview
+
+**TaskForge** is a Trello-like real-time collaborative task management system that integrates all core skills from the first 14 chapters of this course.
+
+```
+taskforge/
+├── Cargo.toml           # Workspace root
+├── crates/
+│   ├── api/             # Axum HTTP + WebSocket service
+│   │   ├── src/
+│   │   │   ├── main.rs
+│   │   │   ├── routes/  # handlers: boards, tasks, users
+│   │   │   ├── auth/    # JWT middleware
+│   │   │   └── ws/      # WebSocket real-time sync
+│   │   └── Cargo.toml
+│   └── core/            # Shared types and business logic
+│       └── src/lib.rs
+├── frontend/            # Next.js 15 frontend
+│   ├── app/
+│   └── package.json
+└── docker-compose.yml   # Local development environment
+```
+
+## Feature List
+
+| Feature | Technology | Status |
+|---------|------------|--------|
+| User Registration/Login | JWT + Argon2 | Core |
+| Board CRUD | Axum REST + SQLx | Core |
+| Task Drag & Drop Sorting | WebSocket Broadcast | Core |
+| Real-Time Multi-User Collaboration | tokio-tungstenite | Core |
+| File Upload | multipart + S3 | Extension |
+| Email Notifications | lettre | Extension |
+
+## Architecture Design
+
+```
+┌─────────────────────┐     ┌──────────────────────┐
+│   Next.js Frontend  │────▶│   Axum API Server    │
+│                     │ REST│                      │
+│  - React Server Comp│◀────│  - /api/boards       │
+│  - Zustand State    │     │  - /api/tasks        │
+│  - TanStack Query   │     │  - /api/users        │
+└─────────────────────┘     │                      │
+         │                  │  WebSocket           │
+         │◀──────────────── │  /ws/board/:id       │
+         │    real-time push └──────────┬───────────┘
+         │                             │
+         │                   ┌─────────▼─────────┐
+         │                   │    PostgreSQL      │
+         │                   │                   │
+         │                   │  boards / tasks   │
+         │                   │  users / events   │
+         └───────────────────└───────────────────┘
+```
+
+## Core Implementation: WebSocket Real-Time Sync
+
+```rust
+// crates/api/src/ws/mod.rs
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
+
+// Each board has its own dedicated broadcast channel
+pub type BoardId = uuid::Uuid;
+pub struct WsState {
+    pub boards: RwLock<HashMap<BoardId, broadcast::Sender<WsEvent>>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WsEvent {
+    TaskCreated { task: TaskDto },
+    TaskMoved { task_id: Uuid, column_id: Uuid, position: i32 },
+    TaskDeleted { task_id: Uuid },
+    UserJoined { user_id: Uuid, username: String },
+}
+
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Path(board_id): Path<Uuid>,
+    Extension(claims): Extension<Claims>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_socket(socket, board_id, claims, state))
+}
+
+async fn handle_socket(
+    socket: WebSocket,
+    board_id: Uuid,
+    claims: Claims,
+    state: Arc<AppState>,
+) {
+    let (mut sender, mut receiver) = socket.split();
+
+    // Subscribe to the broadcast channel for this board
+    let mut rx = {
+        let boards = state.ws.boards.read().await;
+        boards.get(&board_id).map(|tx| tx.subscribe())
+    };
+
+    // Broadcast the join event
+    broadcast_event(&state.ws, board_id, WsEvent::UserJoined {
+        user_id: claims.sub.parse().unwrap(),
+        username: claims.username.clone(),
+    }).await;
+
+    // Forward broadcast messages to the current connection
+    if let Some(mut rx) = rx {
+        let send_task = tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                let msg = serde_json::to_string(&event).unwrap();
+                if sender.send(Message::Text(msg)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Receive messages from the client
+        while let Some(Ok(msg)) = receiver.next().await {
+            // Handle actions sent by the client
+        }
+        send_task.abort();
+    }
+}
+```
+
+## Database Schema
+
+```sql
+-- migrations/001_init.sql
+CREATE TABLE users (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email       TEXT UNIQUE NOT NULL,
+    username    TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE boards (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title       TEXT NOT NULL,
+    owner_id    UUID REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE tasks (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    board_id    UUID REFERENCES boards(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL,
+    description TEXT,
+    column_id   UUID NOT NULL,
+    position    INTEGER NOT NULL DEFAULT 0,
+    assignee_id UUID REFERENCES users(id),
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_tasks_board ON tasks(board_id);
+CREATE INDEX idx_tasks_column ON tasks(column_id, position);
+```
+
+## Next.js Frontend Integration
+
+```typescript
+// frontend/hooks/useBoard.ts
+import { useEffect } from 'react';
+import { useBoardStore } from '@/store/board';
+
+export function useRealtimeBoard(boardId: string) {
+  const { applyEvent } = useBoardStore();
+
+  useEffect(() => {
+    const ws = new WebSocket(`${process.env.NEXT_PUBLIC_WS_URL}/ws/board/${boardId}`);
+
+    ws.onmessage = (e) => {
+      const event = JSON.parse(e.data);
+      applyEvent(event); // Zustand store handles the event
+    };
+
+    return () => ws.close();
+  }, [boardId]);
+}
+```
+
+<Callout type="insight">
+The core challenge of this project is **state consistency**: when multiple users operate simultaneously, WebSocket broadcast ensures all clients see the same state. Rust's `Arc<RwLock<_>>` guarantees thread-safety for server-side in-memory state.
+</Callout>
+
+## Docker Local Development
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: taskforge
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres/taskforge
+      JWT_SECRET: local-dev-secret-change-in-prod
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+```
+
+<VideoPlaceholder
+  title="TaskForge Full Build Walkthrough"
+  description="8-hour complete hands-on: from workspace initialization and database design, to Axum API implementation, WebSocket real-time sync, Next.js frontend integration, and Docker deployment"
+/>
+
+<ProjectCard
+  title="TaskForge — Real-Time Collaborative Task Management System"
+  description="Build a complete full-stack application: Rust Axum backend providing REST API + WebSocket real-time push, Next.js 15 frontend with Kanban board UI, PostgreSQL persistence, JWT authentication, Argon2 password security, and Docker local development environment."
+  skills={["Axum", "WebSocket", "SQLx", "JWT", "Next.js", "Docker", "Cargo Workspace"]}
+  startCommand="git clone https://github.com/rustforge/taskforge && cd taskforge && docker-compose up -d"
+/>

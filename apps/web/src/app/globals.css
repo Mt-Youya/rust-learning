@@ -1,0 +1,264 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/* ─── Theme tokens (CSS vars, switchable via .dark / .light class) ──────── */
+
+@theme {
+  /* RustForge dark palette (default) — rust orange as the only warm voice */
+  --color-background:      oklch(0.09 0.01 265);
+  --color-foreground:      oklch(0.94 0.008 265);
+
+  --color-card:            oklch(0.13 0.012 265);
+  --color-card-foreground: oklch(0.94 0.008 265);
+
+  --color-popover:         oklch(0.13 0.012 265);
+  --color-popover-foreground: oklch(0.94 0.008 265);
+
+  /* Rust orange — primary accent */
+  --color-primary:         oklch(0.68 0.18 42);
+  --color-primary-foreground: oklch(0.09 0.01 265);
+  --color-primary-muted:   oklch(0.68 0.18 42 / 0.15);
+
+  --color-secondary:       oklch(0.18 0.018 265);
+  --color-secondary-foreground: oklch(0.82 0.01 265);
+
+  --color-muted:           oklch(0.16 0.015 265);
+  --color-muted-foreground: oklch(0.52 0.02 265);
+
+  --color-accent:          oklch(0.20 0.022 265);
+  --color-accent-foreground: oklch(0.94 0.008 265);
+
+  --color-destructive:     oklch(0.52 0.22 22);
+  --color-border:          oklch(0.20 0.018 265);
+  --color-input:           oklch(0.16 0.015 265);
+  --color-ring:            oklch(0.68 0.18 42);
+
+  /* Extended palette */
+  --color-rust:            oklch(0.68 0.18 42);
+  --color-rust-bright:     oklch(0.74 0.20 48);
+  --color-rust-dim:        oklch(0.50 0.14 40);
+  --color-rust-surface:    oklch(0.68 0.18 42 / 0.08);
+  --color-code-bg:         oklch(0.11 0.012 265);
+  --color-line:            oklch(0.20 0.018 265);
+  --color-success:         oklch(0.64 0.17 148);
+  --color-warning:         oklch(0.76 0.16 76);
+
+  /* Typography — variables set by Next.js font injection at runtime */
+  --font-display: var(--font-bricolage), "Arial Black", ui-sans-serif, system-ui, sans-serif;
+  --font-sans:    var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    var(--font-jetbrains), var(--font-geist-mono), ui-monospace, monospace;
+
+  /* Spacing — 4pt base */
+  --space-1:  0.25rem;
+  --space-2:  0.5rem;
+  --space-3:  0.75rem;
+  --space-4:  1rem;
+  --space-6:  1.5rem;
+  --space-8:  2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-24: 6rem;
+  --space-32: 8rem;
+
+  /* Radius */
+  --radius:    0.375rem;
+  --radius-sm: calc(var(--radius) * 0.67);
+  --radius-lg: calc(var(--radius) * 2);
+  --radius-xl: calc(var(--radius) * 3);
+
+  /* Easing tokens */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo:  cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-quart:  cubic-bezier(0.5, 0, 0.75, 0);
+}
+
+/* ─── Light theme overrides ──────────────────────────────────────────────
+   :root[data-theme="light"] has specificity (0,2,0), beats :root (0,1,0).
+   next-themes sets data-theme="light" on <html> when light mode is active. */
+
+:root[data-theme="light"] {
+  --color-background:       oklch(0.97 0.006 265);
+  --color-foreground:       oklch(0.13 0.015 265);
+
+  --color-card:             oklch(0.93 0.007 265);
+  --color-card-foreground:  oklch(0.13 0.015 265);
+
+  --color-popover:          oklch(0.99 0.004 265);
+  --color-popover-foreground: oklch(0.13 0.015 265);
+
+  /* Rust orange — slightly deeper for light-bg contrast */
+  --color-primary:          oklch(0.56 0.18 42);
+  --color-primary-foreground: oklch(0.99 0.004 265);
+  --color-primary-muted:    oklch(0.56 0.18 42 / 0.12);
+
+  --color-secondary:        oklch(0.88 0.010 265);
+  --color-secondary-foreground: oklch(0.22 0.018 265);
+
+  --color-muted:            oklch(0.90 0.008 265);
+  --color-muted-foreground: oklch(0.48 0.020 265);
+
+  --color-accent:           oklch(0.87 0.012 265);
+  --color-accent-foreground: oklch(0.13 0.015 265);
+
+  --color-destructive:      oklch(0.50 0.22 22);
+  --color-border:           oklch(0.82 0.014 265);
+  --color-input:            oklch(0.90 0.008 265);
+  --color-ring:             oklch(0.56 0.18 42);
+
+  --color-rust:             oklch(0.56 0.18 42);
+  --color-rust-bright:      oklch(0.62 0.20 48);
+  --color-rust-dim:         oklch(0.44 0.14 40);
+  --color-rust-surface:     oklch(0.56 0.18 42 / 0.08);
+  --color-code-bg:          oklch(0.89 0.010 265);
+  --color-line:             oklch(0.82 0.014 265);
+}
+
+/* Smooth theme transition */
+html {
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* ─── Base reset ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  font-optical-sizing: auto;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* Dark-mode text compensation — light text on dark needs help */
+p, li { line-height: 1.7; letter-spacing: 0.012em; }
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  text-wrap: balance;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+code, pre, kbd { font-family: var(--font-mono); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: oklch(0.25 0.02 265); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-rust); }
+
+/* Focus visible */
+:focus-visible {
+  outline: 2px solid var(--color-rust);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* ─── Utility classes ─────────────────────────────── */
+
+.rust-glow {
+  box-shadow:
+    0 0 0 1px oklch(0.68 0.18 42 / 0.3),
+    0 0 24px oklch(0.68 0.18 42 / 0.18),
+    0 0 64px oklch(0.68 0.18 42 / 0.08);
+}
+
+.rust-border {
+  border: 1px solid oklch(0.68 0.18 42 / 0.35);
+}
+
+/* Grid dot background */
+.grid-bg {
+  background-image:
+    radial-gradient(circle, oklch(0.28 0.02 265 / 0.6) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Horizontal scan line (CRT feel for code areas) */
+.scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    oklch(0 0 0 / 0.06) 3px,
+    oklch(0 0 0 / 0.06) 4px
+  );
+  pointer-events: none;
+}
+
+/* ─── Animations ─────────────────────────────────── */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-10px); }
+}
+
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 oklch(0.68 0.18 42 / 0.4); }
+  70%  { box-shadow: 0 0 0 12px oklch(0.68 0.18 42 / 0); }
+  100% { box-shadow: 0 0 0 0 oklch(0.68 0.18 42 / 0); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes progress-line {
+  from { width: 0; }
+  to   { width: 100%; }
+}
+
+.animate-fade-up   { animation: fade-up  0.6s var(--ease-out-quart) both; }
+.animate-fade-in   { animation: fade-in  0.5s var(--ease-out-quart) both; }
+.animate-float     { animation: float    4s ease-in-out infinite; }
+.animate-pulse-ring { animation: pulse-ring 2s ease-out infinite; }
+
+/* Stagger helpers */
+.stagger-1 { animation-delay: 100ms; }
+.stagger-2 { animation-delay: 200ms; }
+.stagger-3 { animation-delay: 300ms; }
+.stagger-4 { animation-delay: 400ms; }
+.stagger-5 { animation-delay: 500ms; }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Code highlighting (manual tokens) ──────────── */
+
+.token-keyword  { color: oklch(0.72 0.19 295); }
+.token-fn       { color: oklch(0.78 0.17 52); }
+.token-type     { color: oklch(0.74 0.18 195); }
+.token-string   { color: oklch(0.72 0.17 148); }
+.token-comment  { color: oklch(0.46 0.02 265); font-style: italic; }
+.token-number   { color: oklch(0.70 0.18 42); }
+.token-macro    { color: oklch(0.75 0.18 22); }
+.token-lifetime { color: oklch(0.72 0.19 295); }
+.token-punct    { color: oklch(0.60 0.02 265); }

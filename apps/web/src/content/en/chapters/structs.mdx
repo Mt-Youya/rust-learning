@@ -1,0 +1,161 @@
+export const frontmatter = {
+  title: "Structs, Enums, and Pattern Matching",
+  subtitle: "Rust's Powerful Tools for Data Modeling",
+  chapter: 4,
+  slug: "structs",
+  duration: "4 hours",
+  project: "Geometry Area Calculator",
+  status: "available",
+  description: "struct defines data, enum carries data, match exhaustively matches — replace null and exceptions with Option and Result.",
+  prev: "ownership",
+  next: "errors",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Structs: Combining Data + Behavior
+
+<CompareBlock
+  concept="Data Modeling"
+  jsLabel="TypeScript"
+  rustLabel="Rust"
+  js={`interface User {
+  username: string;
+  email: string;
+  age: number;
+}
+
+class UserService {
+  static create(username: string, email: string): User {
+    return { username, email, age: 0 };
+  }
+  
+  greet(user: User): string {
+    return \`Hello, \${user.username}\`;
+  }
+}`}
+  rust={`struct User {
+    username: String,
+    email:    String,
+    age:      u32,
+}
+
+impl User {
+    // associated function (static method)
+    fn new(username: String, email: String) -> User {
+        User { username, email, age: 0 }
+    }
+    
+    // method (takes &self)
+    fn greet(&self) -> String {
+        format!("Hello, {}", self.username)
+    }
+}`}
+  insight="Rust explicitly separates data (struct) and behavior (impl). There is no inheritance, but you have composition and Trait implementations."
+/>
+
+---
+
+## Enums: Algebraic Data Types
+
+Rust's `enum` is far more powerful than in other languages — each variant can carry different types of data:
+
+```rust
+enum Shape {
+    Circle(f64),                            // radius
+    Rectangle(f64, f64),                    // width × height
+    Triangle { base: f64, height: f64 },    // named fields
+}
+
+impl Shape {
+    fn area(&self) -> f64 {
+        match self {
+            Shape::Circle(r)              => std::f64::consts::PI * r * r,
+            Shape::Rectangle(w, h)        => w * h,
+            Shape::Triangle { base, height } => base * height / 2.0,
+        }
+    }
+}
+```
+
+---
+
+## Option: Eliminating null
+
+```rust
+// no more "undefined is not a function"
+fn find_user(id: u32) -> Option<User> {
+    if id == 1 { Some(User::new("Alice".into(), "a@b.com".into())) }
+    else { None }
+}
+
+// forced to handle both cases
+match find_user(1) {
+    Some(user) => println!("{}", user.greet()),
+    None       => println!("user not found"),
+}
+
+// concise syntax
+if let Some(user) = find_user(1) {
+    println!("{}", user.greet());
+}
+
+// chained operations
+let name = find_user(1)
+    .map(|u| u.username)
+    .unwrap_or("anonymous".to_string());
+```
+
+<Callout type="insight">
+  **Option forces you to handle the 'no value' case** — the compiler won't let you ignore None. This is one of the fundamental reasons Rust is safer than JavaScript.
+</Callout>
+
+---
+
+## The Power of Pattern Matching
+
+`match` is exhaustive — you must handle all cases, or compilation fails:
+
+```rust
+let number = 7;
+let text = match number {
+    1        => "one",
+    2..=5    => "two to five",
+    6 | 7    => "six or seven",
+    n @ 8..= => { println!("large number {}", n); "greater than seven" },
+    _        => "other",
+};
+```
+
+**The power of exhaustiveness**: When you add a new variant to your enum, all `match` expressions will trigger a compile error, reminding you to handle the new case. TypeScript's `switch` cannot do this.
+
+---
+
+## Hands-on Project: Geometry Area Calculator
+
+<ProjectCard
+  title="Geometry Area Calculator"
+  description="Define a Shape enum, implement area and perimeter calculations, read shape parameters from the command line, and dispatch logic with pattern matching."
+  skills={["enum definition and implementation", "match destructuring", "impl methods", "command-line argument parsing"]}
+  command="cargo new geometry && cd geometry"
+  difficulty="Beginner"
+  estimatedTime="45 minutes"
+/>
+
+---
+
+## Project Video
+
+<VideoPlaceholder
+  title="Structs, Enums & Pattern Matching"
+  duration="20-minute deep dive"
+  description="Option replacing null, exhaustive match checks, and the algebraic type thinking behind data-carrying enums."
+  src="/videos/ch04-structs.mp4"
+  subtitles="/subtitles/ch04-structs.vtt"
+/>

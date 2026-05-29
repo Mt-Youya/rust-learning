@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- 底板：深色圆角方形，橙色边框 -->
+  <rect x="1" y="1" width="30" height="30" rx="7"
+        fill="#1e1006" stroke="#c86e30" stroke-width="1.5"/>
+  <!-- 锤头：楔形，左高右低 -->
+  <path d="M4.5 10 L4.5 17 L19 17 L19 14 L26.5 12 L26.5 10 Z"
+        fill="#dc6e32"/>
+  <!-- 锤头顶边高光 -->
+  <line x1="4.5" y1="10" x2="26.5" y2="10"
+        stroke="#e8b870" stroke-width="0.8" opacity="0.5"/>
+  <!-- 锤柄 -->
+  <rect x="11.5" y="17" width="6.5" height="10.5" rx="2"
+        fill="#7a4020"/>
+  <!-- 锤柄末端 -->
+  <rect x="11.5" y="24" width="6.5" height="3.5" rx="1.5"
+        fill="#5e3018"/>
+</svg>

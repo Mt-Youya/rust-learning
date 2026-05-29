@@ -1,0 +1,410 @@
+export const frontmatter = {
+  title: "Web Backend",
+  subtitle: "Building Production-Grade REST APIs with Axum",
+  chapter: 12,
+  slug: "web-backend",
+  duration: "5 hours",
+  project: "Blog REST API",
+  status: "available",
+  description: "Axum framework, routing, extractors, and middleware — build your first production-grade Rust web service. JWT authentication will be covered in depth in the next chapter.",
+  prev: "cli",
+  next: "database",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Why Axum?
+
+There are several Rust web frameworks to choose from: Actix-web (maximum performance), Rocket (macro magic), and Warp (functional style).
+**Axum** is the official offering from the Tokio team, integrates seamlessly with the Tokio ecosystem, and has an API design close to Express/Hono — making it the best entry point for frontend engineers.
+
+```toml
+# Cargo.toml
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+```
+
+---
+
+## Hello World: Minimal Axum Server
+
+<CompareBlock
+  concept="Basic HTTP Server"
+  jsLabel="Express.js"
+  rustLabel="Axum"
+  js={`import express from 'express';
+const app = express();
+app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.json({ message: 'Hello World' });
+});
+
+app.listen(3000, () => {
+  console.log('Server on port 3000');
+});`}
+  rust={`use axum::{routing::get, Json, Router};
+use serde_json::{json, Value};
+
+async fn root() -> Json<Value> {
+    Json(json!({ "message": "Hello World" }))
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new().route("/", get(root));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await.unwrap();
+    println!("Server on port 3000");
+    axum::serve(listener, app).await.unwrap();
+}`}
+  insight="The structure is nearly identical: Router → routes → handlers. The difference is that Axum handlers are plain async fns, with parameters injected via Extractors — more type-safe than Express's (req, res) style."
+/>
+
+---
+
+## Routing System
+
+```rust
+use axum::{
+    routing::{get, post, put, delete},
+    Router,
+};
+
+// nested routing, similar to Express Router
+pub fn posts_router() -> Router {
+    Router::new()
+        .route("/posts",          get(list_posts).post(create_post))
+        .route("/posts/:id",      get(get_post).put(update_post).delete(delete_post))
+}
+
+// compose multiple routers
+let app = Router::new()
+    .nest("/api/v1", posts_router())
+    .nest("/api/v1", users_router())
+    .route("/health", get(|| async { "ok" }));
+```
+
+---
+
+## Extractors: Type-Safe Parameter Injection
+
+One of Axum's most elegant design decisions — handler parameters are automatically extracted from the request, with types verified at compile time:
+
+```rust
+use axum::{
+    extract::{Path, Query, State, Json},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+
+// path parameter
+async fn get_post(Path(id): Path<u32>) -> String {
+    format!("Post #{id}")
+}
+
+// query parameters
+#[derive(Deserialize)]
+struct Pagination { page: Option<u32>, per_page: Option<u32> }
+
+async fn list_posts(Query(params): Query<Pagination>) -> String {
+    format!("Page {:?}, size {:?}", params.page, params.per_page)
+}
+
+// JSON request body
+#[derive(Deserialize)]
+struct CreatePost { title: String, content: String }
+
+#[derive(Serialize)]
+struct Post { id: u32, title: String, content: String }
+
+async fn create_post(
+    Json(body): Json<CreatePost>,
+) -> (StatusCode, Json<Post>) {
+    let post = Post { id: 1, title: body.title, content: body.content };
+    (StatusCode::CREATED, Json(post))
+}
+```
+
+<Callout type="tip">
+  **Multiple extractors**: A handler can have multiple parameters, each being a different extractor. Axum extracts them in order — as long as you don't consume the body more than once (JSON body can only be extracted once), you can combine them freely.
+</Callout>
+
+---
+
+## Shared State: AppState
+
+Web services typically need to share a database connection pool, configuration, and more. Axum handles this elegantly with the `State` extractor:
+
+```rust
+use axum::extract::State;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+// application state (replace with a database pool later)
+#[derive(Clone)]
+struct AppState {
+    posts: Arc<RwLock<Vec<Post>>>,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        posts: Arc::new(RwLock::new(Vec::new())),
+    };
+
+    let app = Router::new()
+        .route("/posts", get(list_posts).post(create_post))
+        .with_state(state);  // inject state
+
+    // ...
+}
+
+async fn list_posts(
+    State(state): State<AppState>,  // automatically injected
+) -> Json<Vec<Post>> {
+    let posts = state.posts.read().await;
+    Json(posts.clone())
+}
+
+async fn create_post(
+    State(state): State<AppState>,
+    Json(body): Json<CreatePost>,
+) -> (StatusCode, Json<Post>) {
+    let post = Post { id: 1, title: body.title, content: body.content };
+    state.posts.write().await.push(post.clone());
+    (StatusCode::CREATED, Json(post))
+}
+```
+
+---
+
+## Error Handling: Unified AppError
+
+Rust's error handling philosophy: errors are values, not exceptions. In a web service, a unified error type keeps the code clean:
+
+```rust
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
+use serde_json::json;
+
+// unified error type
+pub enum AppError {
+    NotFound(String),
+    Unauthorized,
+    BadRequest(String),
+    Internal(String),
+}
+
+// convert to HTTP response
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::NotFound(msg)   => (StatusCode::NOT_FOUND, msg),
+            AppError::Unauthorized    => (StatusCode::UNAUTHORIZED, "Unauthorized".into()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Internal(msg)   => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+
+        (status, Json(json!({ "error": message }))).into_response()
+    }
+}
+
+// handlers return Result directly — errors are converted automatically
+async fn get_post(Path(id): Path<u32>) -> Result<Json<Post>, AppError> {
+    let post = find_post(id)
+        .ok_or_else(|| AppError::NotFound(format!("Post #{id} not found")))?;
+    Ok(Json(post))
+}
+```
+
+---
+
+## Middleware: Tower Layer
+
+Axum's middleware is built on `tower`, following the same concept as Express middleware:
+
+```rust
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use axum::middleware;
+
+// built-in middleware: CORS + logging
+let app = Router::new()
+    .route("/posts", get(list_posts))
+    .layer(CorsLayer::permissive())    // CORS
+    .layer(TraceLayer::new_for_http()) // request logging
+
+// custom middleware: JWT verification
+async fn auth_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<Response, AppError> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(AppError::Unauthorized)?;
+
+    verify_jwt(token).map_err(|_| AppError::Unauthorized)?;
+    Ok(next.run(req).await)
+}
+
+// apply auth only to specific routes
+let app = Router::new()
+    .route("/posts", get(list_posts))
+    .route("/posts", post(create_post)
+        .route_layer(middleware::from_fn(auth_middleware))); // only POST requires auth
+```
+
+---
+
+## Hands-On Project: Blog REST API
+
+<ProjectCard
+  title="Blog REST API"
+  description="Build a complete blog backend with Axum, including post CRUD, tag filtering, JWT authentication, and in-memory storage (the next chapter wires up a real database)."
+  skills={["Axum Router", "Extractor", "AppState", "AppError", "CORS Middleware", "JWT Basics"]}
+  command="cargo new blog-api && cd blog-api"
+  difficulty="Intermediate"
+  estimatedTime="90 minutes"
+/>
+
+```rust
+// full API structure overview
+// GET    /api/posts          — list posts (supports ?tag=rust filtering)
+// POST   /api/posts          — create post (requires JWT)
+// GET    /api/posts/:id      — post detail
+// PUT    /api/posts/:id      — update post (requires JWT)
+// DELETE /api/posts/:id      — delete post (requires JWT)
+// POST   /api/auth/login     — login, returns JWT token
+
+use axum::{extract::{Path, Query, State}, routing::{get, post}, Json, Router};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Post {
+    id:      u32,
+    title:   String,
+    content: String,
+    tags:    Vec<String>,
+    author:  String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    posts:   Arc<RwLock<Vec<Post>>>,
+    next_id: Arc<RwLock<u32>>,
+}
+
+impl AppState {
+    fn new() -> Self {
+        Self {
+            posts:   Arc::new(RwLock::new(Vec::new())),
+            next_id: Arc::new(RwLock::new(1)),
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState::new();
+
+    let app = Router::new()
+        .route("/api/posts",     get(list_posts).post(create_post))
+        .route("/api/posts/:id", get(get_post))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    println!("Blog API running at http://localhost:3000");
+    axum::serve(listener, app).await.unwrap();
+}
+
+#[derive(Deserialize)]
+struct ListQuery { tag: Option<String> }
+
+async fn list_posts(
+    State(s): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Json<Vec<Post>> {
+    let posts = s.posts.read().await;
+    let result: Vec<Post> = match &q.tag {
+        Some(tag) => posts.iter().filter(|p| p.tags.contains(tag)).cloned().collect(),
+        None      => posts.clone(),
+    };
+    Json(result)
+}
+
+async fn get_post(
+    State(s): State<AppState>,
+    Path(id): Path<u32>,
+) -> Result<Json<Post>, StatusCode> {
+    let posts = s.posts.read().await;
+    posts.iter()
+        .find(|p| p.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Deserialize)]
+struct CreatePostBody { title: String, content: String, tags: Vec<String> }
+
+async fn create_post(
+    State(s): State<AppState>,
+    Json(body): Json<CreatePostBody>,
+) -> (StatusCode, Json<Post>) {
+    let mut next_id = s.next_id.write().await;
+    let post = Post {
+        id:      *next_id,
+        title:   body.title,
+        content: body.content,
+        tags:    body.tags,
+        author:  "admin".to_string(),
+    };
+    *next_id += 1;
+    s.posts.write().await.push(post.clone());
+    (StatusCode::CREATED, Json(post))
+}
+```
+
+---
+
+## Video Walkthrough
+
+<VideoPlaceholder
+  title="Axum Web Backend: REST API in Practice"
+  duration="56-second overview"
+  description="Axum routing, extractors, error handling, and middleware."
+  src="/videos/ch04-web-backend.mp4"
+  subtitles="/subtitles/ch04-web-backend.vtt"
+/>
+
+---
+
+## Chapter Summary
+
+- ✓ Axum routing system compared with Express
+- ✓ Extractors: Path / Query / Json / State
+- ✓ Unified error type AppError + IntoResponse
+- ✓ Tower middleware: CORS, logging, custom auth
+- ✓ In-memory state with AppState (Arc + RwLock)
+
+Next chapter: [Database & Persistence](/chapter/database) — swap in-memory state for real PostgreSQL and implement type-safe queries with SQLx.

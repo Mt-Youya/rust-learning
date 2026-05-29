@@ -1,0 +1,606 @@
+# ══════════════════════════════════════════════════════════════════
+# ch01_scenes.yaml — Three.js / WebGL 动画场景规格
+# Track C · ch01 Getting Started · RustForge Enhanced Edition
+# 生成时间：2026-05-27
+# ══════════════════════════════════════════════════════════════════
+#
+# 使用方式：
+#   旁白脚本中 [THREE:scene_id] 标注触发对应场景
+#   组件路径：apps/web/src/components/animations/{component_name}.tsx
+# ──────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────
+# 场景 1 · Hook：Node.js 内存泄漏粒子爆炸
+# ──────────────────────────────────────────────────────────────────
+- scene_id: "memory-leak-burst"
+  chapter: 1
+  trigger_timestamp: "00:00"
+  duration_seconds: 20
+  component_name: "MemoryLeakBurstScene"
+  description: >
+    终端风格黑色背景。屏幕中央显示内存占用数字（200MB）。
+    随着旁白，数字缓慢上升（200→500→1024→2048MB），
+    颜色从绿色渐变为橙色、红色。
+    当数字触及 2048MB 时，触发粒子爆炸——
+    数字碎裂成数百个粒子向四周散射，
+    同时屏幕闪烁红光，出现 FATAL ERROR 文字。
+    右下角 Rust Logo 以光晕形式淡入，暗示"解法在这里"。
+
+  particles:
+    count: 400
+    type: "number_fragments"
+    color_start: "#00ff88"   # 绿色 = 正常
+    color_mid: "#ff9900"     # 橙色 = 警告
+    color_end: "#ff2244"     # 红色 = 崩溃
+    explosion_radius: 3.5
+    gravity: -0.02
+    fade_duration: 2.0
+
+  objects:
+    - id: "memory_counter"
+      type: "3d_text"
+      font: "monospace"
+      position: [0, 0, 0]
+      scale_start: 1.0
+      scale_end: 2.5
+    - id: "fatal_error_text"
+      type: "text_overlay"
+      text: "FATAL ERROR: Allocation failed"
+      color: "#ff2244"
+      appear_at: 3.5
+      blink: true
+    - id: "rust_logo"
+      type: "sprite"
+      asset: "rust_logo.svg"
+      position: [3.5, -2, 0]
+      appear_at: 4.5
+      glow_color: "#e77c3a"
+      opacity_start: 0
+      opacity_end: 0.6
+
+  animation:
+    phase_1:
+      action: "count_up"
+      target: "memory_counter"
+      from_value: 200
+      to_value: 2048
+      unit: "MB"
+      duration: 3.5
+      easing: "easeInCubic"
+    phase_2:
+      action: "explode_particles"
+      trigger: "on_max_value"
+      burst_force: 1.8
+      screen_flash:
+        color: "#ff2244"
+        intensity: 0.7
+        duration: 0.3
+    phase_3:
+      action: "fade_in"
+      target: "rust_logo"
+      duration: 1.5
+
+  color_scheme:
+    background: "#0a0a0a"
+    terminal_green: "#00ff88"
+    warning_orange: "#ff9900"
+    danger_red: "#ff2244"
+    rust_orange: "#e77c3a"
+
+  narrator_sync:
+    text: "Node.js 服务跑了几天，内存从 200 兆悄悄涨到了 2 个 G。"
+
+# ──────────────────────────────────────────────────────────────────
+# 场景 2 · Rust 三大编译期保证 · 三盾动画
+# ──────────────────────────────────────────────────────────────────
+- scene_id: "rust-shield-trio"
+  chapter: 1
+  trigger_timestamp: "00:45"
+  duration_seconds: 50
+  component_name: "RustShieldTrioScene"
+  description: >
+    深色背景，画面从左到右依次出现三列，各列由一个 3D 盾牌图标主导。
+    盾牌用 Three.js BufferGeometry 构建六边形，带有发光 shader（glow effect）。
+    第一列（左）：零运行时开销。GC 循环箭头图标出现 → 被红色 X 划掉动画 →
+    CPU 芯片图标从右飞入并高亮绿色，盾牌亮起橙色光晕。
+    第二列（中）：内存安全。悬垂指针（断箭）图标闪烁红色 → 被盾牌屏蔽 →
+    消散成灰色粒子。盾牌亮起蓝色光晕。
+    第三列（右）：并发安全。两个红色线程球相互冲突（碰撞动画）→
+    编译器红线从上方降下拦截 → 出现 COMPILE ERROR 文字。盾牌亮起紫色光晕。
+    最终三列同时高亮，底部出现"全部在编译期验证"文字从中心扩散放大。
+
+  objects:
+    - id: "shield_zero_cost"
+      type: "hex_shield_3d"
+      position: [-4, 0, 0]
+      glow_color: "#e77c3a"
+    - id: "shield_memory"
+      type: "hex_shield_3d"
+      position: [0, 0, 0]
+      glow_color: "#4fc3f7"
+    - id: "shield_concurrency"
+      type: "hex_shield_3d"
+      position: [4, 0, 0]
+      glow_color: "#ce93d8"
+    - id: "gc_icon"
+      type: "cycle_arrow_icon"
+      position: [-4, 1.5, 0]
+    - id: "cpu_icon"
+      type: "chip_icon"
+      position: [-4, 1.5, 0]
+    - id: "dangling_ptr_icon"
+      type: "broken_arrow_icon"
+      position: [0, 1.5, 0]
+    - id: "thread_balls"
+      type: "sphere_pair"
+      position: [4, 1.5, 0]
+      color_a: "#ff5252"
+      color_b: "#ff7043"
+    - id: "compile_bar"
+      type: "horizontal_bar"
+      color: "#ff1744"
+      label: "COMPILE ERROR"
+      position: [4, 0.5, 0]
+
+  animation:
+    phase_1:         # 0-3s: 第一列出现
+      action: "reveal_column"
+      target: "shield_zero_cost"
+      show_gc_icon: true
+    phase_2:         # 3-6s: GC划掉，CPU飞入
+      action: "cross_out"
+      target: "gc_icon"
+    phase_3:
+      action: "fly_in"
+      target: "cpu_icon"
+      from: [6, 1.5, 0]
+    phase_4:         # 6-10s: 第二列
+      action: "reveal_column"
+      target: "shield_memory"
+      show_dangling_ptr: true
+    phase_5:
+      action: "flash_red_dissolve"
+      target: "dangling_ptr_icon"
+      dissolve_to_particles: true
+    phase_6:         # 10-14s: 第三列
+      action: "reveal_column"
+      target: "shield_concurrency"
+    phase_7:
+      action: "collision_bounce"
+      target: "thread_balls"
+    phase_8:
+      action: "drop_bar"
+      target: "compile_bar"
+    phase_9:         # 14-17s: 三列同时高亮
+      action: "simultaneous_glow"
+      targets: ["shield_zero_cost", "shield_memory", "shield_concurrency"]
+      tagline:
+        text: "全部在编译期验证"
+        position: [0, -2.5, 0]
+        scale_from: 0.1
+        scale_to: 1.4
+        color: "#ffffff"
+
+  color_scheme:
+    background: "#0d0d0d"
+    zero_cost_color: "#e77c3a"
+    memory_safe_color: "#4fc3f7"
+    concurrency_color: "#ce93d8"
+    error_red: "#ff1744"
+    text_white: "#f0f0f0"
+
+  narrator_sync:
+    text: "Rust 好在哪？三个点：零运行时开销、内存安全、并发安全——全在编译期验证。"
+
+# ──────────────────────────────────────────────────────────────────
+# 场景 3 · rustup vs nvm · 3D 立体比较台
+# ──────────────────────────────────────────────────────────────────
+- scene_id: "toolchain-3d-compare"
+  chapter: 1
+  trigger_timestamp: "02:15"
+  duration_seconds: 25
+  component_name: "ToolchainCompareScene"
+  description: >
+    画面分为左右两个 3D 平台（类似舞台），轻微透视角度。
+    左平台标注 nvm，右平台标注 rustup，平台用发光边框区分（蓝色 vs 橙色）。
+    功能条目从平台底部向上逐行出现（像堆叠积木）：
+    - 两边都有：「版本安装」「版本切换」「默认版本设置」（绿色积木）
+    - 只有 rustup 有：「组件管理（clippy / rustfmt）」「编译目标（wasm32）」「工具链频道（stable/nightly）」
+      这三个额外积木用橙色高亮，且比 nvm 那侧高出一截，视觉上 rustup 平台更高更丰富。
+    底部注释小字：「类比基本成立，但 rustup 功能更多」
+
+  objects:
+    - id: "nvm_platform"
+      type: "raised_platform_3d"
+      position: [-3, -1.5, 0]
+      color: "#1565c0"
+      label: "nvm"
+    - id: "rustup_platform"
+      type: "raised_platform_3d"
+      position: [3, -1.5, 0]
+      color: "#e77c3a"
+      label: "rustup"
+    - id: "shared_blocks"
+      type: "stacked_blocks"
+      count: 3
+      color: "#4caf50"
+      labels: ["版本安装", "版本切换", "默认版本"]
+    - id: "rustup_extra_blocks"
+      type: "stacked_blocks"
+      count: 3
+      color: "#e77c3a"
+      labels: ["组件管理", "编译目标", "工具链频道"]
+      highlight: true
+
+  animation:
+    phase_1:
+      action: "camera_dolly_in"
+      from: [0, 0, 8]
+      to: [0, 0, 5]
+      duration: 1.5
+    phase_2:
+      action: "stack_blocks"
+      target: "shared_blocks"
+      both_platforms: true
+      stagger: 0.4
+    phase_3:
+      action: "stack_blocks"
+      target: "rustup_extra_blocks"
+      platform: "rustup_platform"
+      stagger: 0.5
+      emphasize:
+        scale_bounce: 1.2
+        glow_pulse: true
+    phase_4:
+      action: "show_label"
+      text: "类比基本成立，但 rustup 功能更多"
+      position: [0, -3, 0]
+      color: "#aaaaaa"
+      font_size: "small"
+
+  color_scheme:
+    background: "#0d0d0d"
+    nvm_blue: "#1565c0"
+    rustup_orange: "#e77c3a"
+    shared_green: "#4caf50"
+    extra_highlight: "#ff9800"
+
+  narrator_sync:
+    text: "rustup 比 nvm 功能更多，它还能管理组件和编译目标。"
+
+# ──────────────────────────────────────────────────────────────────
+# 场景 4 · Cargo 粒子聚合 · npm + webpack + jest → Cargo
+# ──────────────────────────────────────────────────────────────────
+- scene_id: "cargo-particle-merge"
+  chapter: 1
+  trigger_timestamp: "02:40"
+  duration_seconds: 35
+  component_name: "CargoParticleMergeScene"
+  description: >
+    画面三角布局，三个球形粒子群分别代表 npm（红色）、webpack（蓝色）、jest（紫色），
+    各自悬浮在三个顶点位置，粒子内部缓慢旋转形成星云感。
+    每个粒子群下方有功能标签（依赖管理 / 构建系统 / 测试框架）逐字打出。
+    然后三个粒子群开始向画面中心移动，粒子互相渗透混合。
+    合并完成后，中心出现一个更大的橙色粒子球，标注 Cargo。
+    Cargo 球展开旋转，内部显示三段功能描述，底部出现「开箱即用，无需额外配置」。
+
+  particles:
+    npm_group:
+      count: 150
+      color: "#cc3534"
+      initial_position: [-3.5, 2, 0]
+      label: "npm · 依赖管理"
+    webpack_group:
+      count: 150
+      color: "#1c78c0"
+      initial_position: [3.5, 2, 0]
+      label: "webpack · 构建系统"
+    jest_group:
+      count: 150
+      color: "#99424f"
+      initial_position: [0, -2.5, 0]
+      label: "jest · 测试框架"
+    cargo_merged:
+      count: 500
+      color: "#e77c3a"
+      final_position: [0, 0, 0]
+      radius: 1.8
+
+  animation:
+    phase_1:         # 0-4s: 三群出现，标签打字动画
+      action: "spawn_groups"
+      stagger: 0.8
+      internal_rotation: true
+      rotation_speed: 0.3
+    phase_2:         # 4-10s: 粒子群标签逐字显示
+      action: "typewriter_labels"
+      duration: 3.0
+    phase_3:         # 10-18s: 向中心聚合
+      action: "converge_to_center"
+      duration: 5.0
+      easing: "easeInOutCubic"
+      particle_mix: true         # 粒子颜色渐变混合
+      trail_effect: true         # 拖尾粒子
+    phase_4:         # 18-24s: Cargo 球成形，旋转展示
+      action: "form_cargo_sphere"
+      color_transition_to: "#e77c3a"
+      label: "Cargo"
+      label_scale: 2.0
+      rotation_speed: 0.5
+    phase_5:         # 24-28s: 底部 tagline
+      action: "show_tagline"
+      text: "开箱即用，无需额外配置"
+      appear: "fade_scale_up"
+      color: "#ffffff"
+
+  color_scheme:
+    background: "#0d0d0d"
+    npm_red: "#cc3534"
+    webpack_blue: "#1c78c0"
+    jest_maroon: "#99424f"
+    cargo_orange: "#e77c3a"
+    label_white: "#f0f0f0"
+
+  narrator_sync:
+    text: "Cargo 同时做了 npm、webpack 和 jest 三件事——依赖管理、构建、测试，全在一个工具里。"
+
+# ──────────────────────────────────────────────────────────────────
+# 场景 5 · cargo run 3D 管道流动可视化
+# ──────────────────────────────────────────────────────────────────
+- scene_id: "cargo-pipeline-3d"
+  chapter: 1
+  trigger_timestamp: "04:25"
+  duration_seconds: 30
+  component_name: "CargoPipeline3DScene"
+  description: >
+    3D 视角的发光管道系统（类似工业管道图）。画面从左到右：
+    用户终端（绿色光点）→ Cargo 引擎盒（橙色立方体，内部齿轮旋转）
+    → Cargo.toml 文件（扫描动画）→ rustc 编译器（蓝色多面体，粒子进入后重新排列输出）
+    → target/debug 目录（文件夹图标）→ 可执行文件（锃亮胶囊）→ 终端输出（Hello, world!）
+    粒子流沿管道流动，每到一个节点发光脉冲。
+    相机做一个缓慢的 dolly + 旋转，从正视图过渡到俯视 3/4 角度。
+
+  pipeline_nodes:
+    - id: "user_terminal"
+      type: "terminal_icon"
+      position: [-7, 0, 0]
+      color: "#00ff88"
+      label: "cargo run"
+    - id: "cargo_engine"
+      type: "cube_with_gears"
+      position: [-4, 0, 0]
+      color: "#e77c3a"
+      label: "Cargo"
+      gear_rotation: true
+    - id: "cargo_toml_node"
+      type: "file_icon"
+      position: [-1.5, 1.5, 0]
+      color: "#ffd54f"
+      label: "Cargo.toml"
+      scan_animation: true
+    - id: "rustc_compiler"
+      type: "polyhedron"
+      position: [1.5, 0, 0]
+      color: "#5b9bd5"
+      label: "rustc"
+      particle_reorder: true
+    - id: "target_dir"
+      type: "folder_icon"
+      position: [4, 0, 0]
+      color: "#78909c"
+      label: "target/debug/"
+    - id: "executable"
+      type: "capsule"
+      position: [6.5, 0, 0]
+      color: "#c8e6c9"
+      label: "temp-converter"
+      shine_effect: true
+    - id: "output_terminal"
+      type: "terminal_icon"
+      position: [9, 0, 0]
+      color: "#00ff88"
+      label: "Hello, world!"
+
+  animation:
+    phase_1:
+      action: "reveal_pipeline"
+      direction: "left_to_right"
+      duration: 3.0
+      pipe_draw_speed: 0.5
+    phase_2:
+      action: "flow_particles"
+      along_pipeline: true
+      particle_color: "#e77c3a"
+      pulse_on_nodes: true
+      flow_speed: 1.2
+    phase_3:
+      action: "camera_orbit"
+      from_angle: [0, 0]
+      to_angle: [0.3, -0.2]
+      duration: 4.0
+    phase_4:
+      action: "highlight_node"
+      target: "rustc_compiler"
+      note: "这里自动调用 rustc"
+      note_color: "#aaaaaa"
+    phase_5:
+      action: "show_tagline"
+      text: "你只需要 cargo，rustc 是被自动调用的"
+      position: [0, -3, 0]
+      color: "#aaaaaa"
+
+  color_scheme:
+    background: "#0d0d0d"
+    pipe_color: "#37474f"
+    particle_color: "#e77c3a"
+    node_glow: "#4fc3f7"
+    terminal_green: "#00ff88"
+
+  narrator_sync:
+    text: "cargo run 背后的流程：Cargo 读 Cargo.toml，调用 rustc，生成可执行文件，自动执行。"
+
+# ──────────────────────────────────────────────────────────────────
+# 场景 6 · 变量不可变 · 锁的视觉隐喻
+# ──────────────────────────────────────────────────────────────────
+- scene_id: "immutable-lock"
+  chapter: 1
+  trigger_timestamp: "05:10"
+  duration_seconds: 40
+  component_name: "ImmutableLockScene"
+  description: >
+    画面中央是一行代码：let x = 5，代码上方悬浮着一把 3D 锁（闭合状态，灰色）。
+    当旁白说「强行赋值」时，出现赋值操作 x = 6，锁变红色且震动，
+    屏幕出现红色裂纹动画，错误信息从裂纹中浮出：
+    「cannot assign twice to immutable variable」
+    然后画面重置，代码变为 let mut x = 5——锁的外形打开（开锁动画），
+    变为绿色，赋值 x = 6 顺畅通过，绿色粒子流向终端输出「6」。
+    右侧辅助图：let 下方有锁图标，let mut 下方有解锁图标，用对比强化记忆。
+
+  objects:
+    - id: "code_display"
+      type: "code_block_3d"
+      position: [0, 0, 0]
+      content_immutable: "let x = 5;\nx = 6;  // ❌"
+      content_mutable: "let mut x = 5;\nx = 6;  // ✓"
+    - id: "padlock_3d"
+      type: "padlock_mesh"
+      position: [0, 2, 0]
+      state_start: "locked"
+      color_locked: "#9e9e9e"
+      color_error: "#ff1744"
+      color_unlocked: "#4caf50"
+    - id: "error_text"
+      type: "floating_text"
+      text: "cannot assign twice to immutable variable"
+      color: "#ff1744"
+      appear_at: 4.0
+    - id: "hint_text"
+      type: "floating_text"
+      text: "consider making this binding mutable: `mut x`"
+      color: "#ff9800"
+      appear_at: 5.5
+    - id: "screen_cracks"
+      type: "shader_effect"
+      effect: "crack_overlay"
+      color: "#ff1744"
+      intensity: 0.4
+    - id: "success_particles"
+      type: "particle_stream"
+      color: "#4caf50"
+      direction: "right"
+      appear_at: 12.0
+
+  animation:
+    phase_1:         # 0-3s: let x = 5 出现，锁出现
+      action: "typewrite_code"
+      content: "immutable"
+      lock_appear: true
+    phase_2:         # 3-6s: x = 6 追加，锁震动变红
+      action: "append_code"
+      line: "x = 6;"
+      lock_shake: true
+      lock_color_change: "error"
+    phase_3:         # 6-9s: 裂纹 + 错误信息
+      action: "show_error"
+      crack_effect: true
+      float_error_text: true
+      float_hint_text: true
+    phase_4:         # 9-12s: 画面重置，let mut 版本
+      action: "reset_and_retype"
+      content: "mutable"
+      lock_open_animation: true
+      lock_color_change: "success"
+    phase_5:         # 12-16s: 赋值成功，粒子流
+      action: "flow_success"
+      particle_stream: true
+      output_text: "6"
+    phase_6:         # 16-18s: 右侧对比图淡入
+      action: "show_comparison_icons"
+      left_label: "let = 不可变"
+      right_label: "let mut = 显式可变"
+
+  color_scheme:
+    background: "#0d0d0d"
+    lock_grey: "#9e9e9e"
+    lock_red: "#ff1744"
+    lock_green: "#4caf50"
+    error_red: "#ff1744"
+    success_green: "#4caf50"
+    code_yellow: "#ffd54f"
+    hint_orange: "#ff9800"
+
+  narrator_sync:
+    text: "let x 等于 5，强行赋值编译器会报错。要修改，显式写 let mut x——锁打开了，绿色通过。"
+
+# ──────────────────────────────────────────────────────────────────
+# 场景 7 · npm vs cargo 命令对照气泡图（增强版）
+# ──────────────────────────────────────────────────────────────────
+- scene_id: "cargo-vs-npm"
+  chapter: 1
+  trigger_timestamp: "04:45"
+  duration_seconds: 25
+  component_name: "CargoVsNpmBubblesScene"
+  description: >
+    命令对比气泡图。左列 npm 命令气泡（红色），右列 cargo 命令气泡（橙色），
+    中间用发光箭头连接。气泡从上到下依次弹出（弹簧效果）。
+    每对命令出现时，对应的气泡轻微脉冲高亮，旁白同步朗读。
+    最后一行（npm publish → cargo publish）附注「crates.io = Rust 的 npm registry」。
+    底部出现「记住这几条，日常 80% 够用」。
+
+  bubble_pairs:
+    - left: "npm install"
+      right: "cargo add"
+      appear_at: 1.0
+    - left: "npm run build"
+      right: "cargo build --release"
+      appear_at: 2.5
+    - left: "npm test"
+      right: "cargo test"
+      appear_at: 4.0
+    - left: "npm publish"
+      right: "cargo publish"
+      note: "→ crates.io (Rust 的 npm 仓库)"
+      appear_at: 5.5
+
+  animation:
+    phase_1:
+      action: "spring_bounce_in"
+      stagger: 1.5
+      spring_damping: 0.4
+    phase_2:
+      action: "pulse_highlight"
+      on_appear: true
+      pulse_scale: 1.15
+      pulse_duration: 0.3
+    phase_3:
+      action: "draw_arrows"
+      arrow_style: "glowing"
+      color: "#e77c3a"
+    phase_4:
+      action: "show_tagline"
+      text: "记住这几条，日常 80% 够用"
+      appear_at: 7.5
+
+  color_scheme:
+    background: "#0d0d0d"
+    npm_bubble: "#c62828"
+    cargo_bubble: "#e77c3a"
+    arrow_color: "#e77c3a"
+    note_color: "#9e9e9e"
+
+  narrator_sync:
+    text: "npm install 对应 cargo add，npm run build 对应 cargo build release，npm test 对应 cargo test。"
+
+# ──────────────────────────────────────────────────────────────────
+# 附录：场景使用汇总
+# ──────────────────────────────────────────────────────────────────
+# scene_id              | timestamp | duration | component
+# ─────────────────────────────────────────────────────────────────
+# memory-leak-burst     | 00:00     | 20s      | MemoryLeakBurstScene
+# rust-shield-trio      | 00:45     | 50s      | RustShieldTrioScene
+# toolchain-3d-compare  | 02:15     | 25s      | ToolchainCompareScene
+# cargo-particle-merge  | 02:40     | 35s      | CargoParticleMergeScene
+# cargo-pipeline-3d     | 04:25     | 30s      | CargoPipeline3DScene
+# cargo-vs-npm          | 04:45     | 25s      | CargoVsNpmBubblesScene
+# immutable-lock        | 05:10     | 40s      | ImmutableLockScene
+# ──────────────────────────────────────────────────────────────────

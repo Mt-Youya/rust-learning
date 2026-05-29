@@ -1,0 +1,209 @@
+export const frontmatter = {
+  title: "CLI 工具与 WebAssembly",
+  subtitle: "clap · wasm-pack · 跨平台编译",
+  chapter: 11,
+  slug: "cli",
+  duration: "3 小时",
+  project: "Markdown 解析器（CLI + WASM 双发布）",
+  status: "available",
+  description: "clap 构建专业 CLI 工具、wasm-pack 编译 WebAssembly——让同一份 Rust 代码跑在终端和浏览器里，性能远超纯 JavaScript 实现。",
+  prev: "testing",
+  next: "web-backend",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 用 clap 构建 CLI
+
+`clap` 是 Rust 生态最成熟的 CLI 框架，类比 Node.js 的 `commander` 或 `yargs`。
+
+```toml
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+```
+
+```rust
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "mdtool", about = "Markdown 处理工具", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// 将 Markdown 转换为 HTML
+    Convert {
+        /// 输入文件路径
+        #[arg(short, long)]
+        input: std::path::PathBuf,
+
+        /// 输出文件路径（默认 stdout）
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+    /// 提取所有标题
+    Headings {
+        /// 输入文件
+        file: std::path::PathBuf,
+
+        /// 最大标题层级
+        #[arg(short, long, default_value = "6")]
+        level: u8,
+    },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Convert { input, output } => { /* ... */ }
+        Commands::Headings { file, level } => { /* ... */ }
+    }
+}
+```
+
+<Callout type="insight">
+clap 的 `derive` 宏从结构体和枚举**自动生成**参数解析代码、`--help` 文档、错误提示。类型系统保证参数类型正确——不再手动解析字符串。
+</Callout>
+
+## 进度条与终端样式
+
+```rust
+use indicatif::{ProgressBar, ProgressStyle};
+use console::style;
+
+let pb = ProgressBar::new(100);
+pb.set_style(ProgressStyle::default_bar()
+    .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+    .unwrap());
+
+for i in 0..100 {
+    pb.inc(1);
+    pb.set_message(format!("处理文件 {}", i));
+}
+pb.finish_with_message(style("完成！").green().to_string());
+```
+
+## WebAssembly：Rust 跑在浏览器里
+
+### 为什么选 Rust 写 WASM？
+
+- 无 GC 暂停，性能可预测
+- 二进制体积小（不带 runtime）
+- 直接操作内存，适合计算密集型任务
+- 同一套代码，CLI + WASM 双发布
+
+### wasm-pack 工作流
+
+```bash
+# 安装工具
+cargo install wasm-pack
+
+# 创建 WASM 库
+cargo new --lib md-parser
+```
+
+```toml
+# Cargo.toml
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib 用于 WASM，rlib 用于 CLI
+
+[dependencies]
+wasm-bindgen = "0.2"
+pulldown-cmark = "0.10"  # Markdown 解析器
+```
+
+```rust
+// src/lib.rs
+use wasm_bindgen::prelude::*;
+use pulldown_cmark::{Parser, Options, html};
+
+#[wasm_bindgen]
+pub fn markdown_to_html(input: &str) -> String {
+    let options = Options::all();
+    let parser = Parser::new_ext(input, options);
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+    html_output
+}
+
+#[wasm_bindgen]
+pub fn extract_headings(input: &str, max_level: u8) -> JsValue {
+    // 返回 JS 可用的 JSON 数据
+    let headings: Vec<String> = /* ... */;
+    serde_wasm_bindgen::to_value(&headings).unwrap()
+}
+```
+
+<CompareBlock
+  jsTitle="在 JS 中调用 WASM"
+  rustTitle="Rust WASM 导出函数"
+  js={`import init, { markdown_to_html } from './md_parser.js';
+
+await init(); // 加载 WASM 模块
+
+const html = markdown_to_html('# Hello\n\nWorld');
+console.log(html); // <h1>Hello</h1><p>World</p>`}
+  rust={`#[wasm_bindgen]
+pub fn markdown_to_html(input: &str) -> String {
+    // 这个函数被编译为 WASM 导出
+    // JS 可以直接调用，就像调用 JS 函数一样
+    let parser = Parser::new(input);
+    let mut out = String::new();
+    html::push_html(&mut out, parser);
+    out
+}`}
+/>
+
+### 编译与发布
+
+```bash
+# 编译为 WASM + 生成 JS 绑定
+wasm-pack build --target web     # 浏览器直接使用
+wasm-pack build --target bundler # 配合 webpack/vite
+wasm-pack build --target nodejs  # Node.js 使用
+
+# 生成的文件在 pkg/ 目录
+# pkg/md_parser_bg.wasm  — 编译后的二进制
+# pkg/md_parser.js       — 自动生成的 JS 胶水代码
+# pkg/md_parser.d.ts     — TypeScript 类型定义
+```
+
+<Callout type="tip">
+`wasm-pack build --target bundler` 生成的包可以直接发布到 npm，在 Next.js / Vite 项目中 `import` 使用，和普通 npm 包无异。类型定义文件让 TypeScript 项目有完整的智能提示。
+</Callout>
+
+### 性能对比
+
+```javascript
+// 在 Next.js 中对比同等逻辑的 JS vs WASM 实现
+const ITERATIONS = 100_000;
+
+console.time('JS Markdown Parser');
+for (let i = 0; i < ITERATIONS; i++) jsParser(input);
+console.timeEnd('JS Markdown Parser');  // ~2300ms
+
+console.time('Rust WASM Parser');
+for (let i = 0; i < ITERATIONS; i++) wasmParser(input);
+console.timeEnd('Rust WASM Parser');    // ~180ms  (~12x faster)
+```
+
+<VideoPlaceholder
+  title="CLI + WASM 双发布演示"
+  description="从一个 Rust 库开始：先编译为 CLI 工具用于本地处理，再用 wasm-pack 编译为 WASM 在 Next.js 项目中运行，展示代码零修改的跨平台能力"
+/>
+
+<ProjectCard
+  title="Markdown 解析器（CLI + WASM 双发布）"
+  description="用 pulldown-cmark 实现 Markdown 解析核心逻辑，通过 clap 提供 CLI 接口（支持文件转换和标题提取），同时用 wasm-pack 编译为 WASM 模块供浏览器调用，发布到 npm。"
+  skills={["clap", "wasm-bindgen", "wasm-pack", "pulldown-cmark", "跨平台编译"]}
+  startCommand="cargo new --lib md-parser && cd md-parser"
+/>

@@ -1,0 +1,265 @@
+export const frontmatter = {
+  title: "云原生运维",
+  subtitle: "Kubernetes · 可观测性 · SRE 实践",
+  chapter: 17,
+  slug: "cloud-ops",
+  duration: "5 小时",
+  project: "生产级云原生部署架构",
+  status: "available",
+  description: "Helm 部署 Rust 服务、Prometheus + Grafana 监控、OpenTelemetry 分布式链路追踪、滚动发布与蓝绿部署——掌握让 Rust 服务在 Kubernetes 上稳定运行的完整工具链。",
+  prev: "devops",
+  next: "ai",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Rust 服务的 Kubernetes 优势
+
+Rust 编译产物是单一静态二进制，天然适合容器化：
+
+| 指标 | Node.js 镜像 | Rust 镜像 |
+|------|-------------|----------|
+| 基础镜像 | node:20 ~1.1GB | scratch / distroless ~10MB |
+| 启动时间 | ~2-3s | ~50ms |
+| 内存占用（空载）| ~80MB | ~5MB |
+| CPU 使用（空载）| 持续约 1% | 接近 0% |
+
+## 极致压缩的 Docker 镜像
+
+```dockerfile
+# 多阶段构建：builder + distroless 运行时
+FROM rust:1.82-slim AS builder
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+
+# 静态链接：消除对系统库的依赖
+RUN rustup target add x86_64-unknown-linux-musl
+RUN apt-get update && apt-get install -y musl-tools
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+# 最终镜像：无 shell、无包管理器、仅二进制
+FROM gcr.io/distroless/static-debian12
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/api /api
+EXPOSE 3001
+ENTRYPOINT ["/api"]
+```
+
+<Callout type="insight">
+`distroless` 镜像不含 shell 和任何系统工具——攻击者即使突破应用层，也无法执行系统命令。结合 musl 静态链接，最终镜像只有约 8MB，安全面极小。
+</Callout>
+
+## Kubernetes 部署清单
+
+```yaml
+# k8s/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskforge-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: taskforge-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0       # 零停机滚动发布
+  template:
+    metadata:
+      labels:
+        app: taskforge-api
+      annotations:
+        prometheus.io/scrape: "true"   # 自动发现 metrics
+        prometheus.io/port: "9090"
+    spec:
+      containers:
+      - name: api
+        image: ghcr.io/myorg/taskforge-api:v1.2.3
+        ports:
+        - containerPort: 3001
+        - containerPort: 9090  # Prometheus metrics 端口
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: taskforge-secrets
+              key: database-url
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3001
+```
+
+## 在 Rust 中暴露 Prometheus 指标
+
+```toml
+[dependencies]
+prometheus = "0.13"
+axum-prometheus = "0.6"
+```
+
+```rust
+use axum_prometheus::PrometheusMetricLayer;
+use prometheus::{Counter, Histogram, register_counter, register_histogram};
+
+lazy_static::lazy_static! {
+    static ref HTTP_REQUESTS_TOTAL: Counter = register_counter!(
+        "http_requests_total",
+        "Total HTTP requests"
+    ).unwrap();
+
+    static ref HTTP_REQUEST_DURATION: Histogram = register_histogram!(
+        "http_request_duration_seconds",
+        "HTTP request duration"
+    ).unwrap();
+
+    static ref ACTIVE_WS_CONNECTIONS: prometheus::Gauge = prometheus::register_gauge!(
+        "active_websocket_connections",
+        "Number of active WebSocket connections"
+    ).unwrap();
+}
+
+pub fn metrics_router() -> Router {
+    Router::new()
+        .route("/metrics", get(prometheus_metrics_handler))
+}
+
+// 自动为所有路由添加 HTTP 指标
+let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+let app = Router::new()
+    .merge(api_router())
+    .layer(prometheus_layer);
+```
+
+## OpenTelemetry 分布式链路追踪
+
+```toml
+[dependencies]
+opentelemetry = "0.22"
+opentelemetry-jaeger = "0.21"
+tracing-opentelemetry = "0.23"
+tracing = "0.1"
+```
+
+```rust
+use opentelemetry::global;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+fn init_tracing() {
+    let tracer = opentelemetry_jaeger::new_agent_pipeline()
+        .with_service_name("taskforge-api")
+        .install_batch(opentelemetry::runtime::Tokio)
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
+// 在 handler 中创建 span
+#[tracing::instrument(skip(pool), fields(board_id = %id))]
+async fn get_board(
+    Path(id): Path<Uuid>,
+    State(pool): State<PgPool>,
+) -> Result<Json<Board>, StatusCode> {
+    let board = sqlx::query_as!(Board, "SELECT * FROM boards WHERE id = $1", id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok(Json(board))
+}
+```
+
+## HPA：水平自动扩缩容
+
+```yaml
+# k8s/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: taskforge-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: taskforge-api
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Pods
+    pods:
+      metric:
+        name: active_websocket_connections  # 自定义指标
+      target:
+        type: AverageValue
+        averageValue: "500"   # 每个 Pod 最多 500 个 WS 连接
+```
+
+<Callout type="tip">
+基于自定义指标（WebSocket 连接数）扩缩容比基于 CPU 更准确——Rust 服务 CPU 极低，仅靠 CPU 指标很难触发扩缩。把业务指标暴露给 HPA 是生产实践。
+</Callout>
+
+## 蓝绿部署策略
+
+```bash
+# 使用 kubectl 实现蓝绿部署
+# 当前 production 指向 blue deployment
+
+# 1. 部署 green 版本（新版本）
+kubectl apply -f k8s/deployment-green.yaml
+
+# 2. 等待 green 就绪
+kubectl rollout status deployment/taskforge-api-green
+
+# 3. 运行冒烟测试
+./scripts/smoke-test.sh green
+
+# 4. 切换流量到 green
+kubectl patch service taskforge-api \
+  -p '{"spec":{"selector":{"version":"green"}}}'
+
+# 5. 观察 30 秒，无异常则删除 blue
+kubectl delete deployment taskforge-api-blue
+```
+
+<VideoPlaceholder
+  title="K8s 云原生部署全流程演示"
+  description="从本地 Docker Compose 到 k3s 集群：部署 Axum 服务、配置 Prometheus 抓取、Grafana 面板、OpenTelemetry 追踪链路、HPA 压测扩容演示"
+/>
+
+<ProjectCard
+  title="生产级云原生部署架构"
+  description="将 TaskForge 部署到 k3s 集群：distroless 镜像构建、K8s Deployment + Service + Ingress、Prometheus 指标暴露、Grafana 监控面板、OpenTelemetry 链路追踪接入 Jaeger、HPA 自动扩缩容配置。"
+  skills={["Kubernetes", "Prometheus", "Grafana", "OpenTelemetry", "HPA", "蓝绿部署"]}
+  startCommand="k3d cluster create taskforge && kubectl apply -f k8s/"
+/>

@@ -1,0 +1,208 @@
+export const frontmatter = {
+  title: "集合与函数式编程",
+  subtitle: "Vec · HashMap · 闭包 · 迭代器链",
+  chapter: 7,
+  slug: "collections",
+  duration: "3 小时",
+  project: "日志分析器",
+  status: "available",
+  description: "Vec 动态数组、HashMap 键值存储、闭包捕获环境、迭代器惰性链式操作——用函数式思维写出简洁高效的 Rust 代码。",
+  prev: "generics",
+  next: "concurrency",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Vec：Rust 的动态数组
+
+`Vec<T>` 是 Rust 最常用的集合，类似 JavaScript 的 `Array`，但有严格的类型约束和所有权语义。
+
+<CompareBlock
+  jsTitle="JavaScript Array"
+  rustTitle="Rust Vec"
+  js={`const nums = [1, 2, 3];
+nums.push(4);
+const doubled = nums.map(x => x * 2);
+const evens = doubled.filter(x => x % 2 === 0);`}
+  rust={`let mut nums = vec![1, 2, 3];
+nums.push(4);
+let result: Vec<i32> = nums
+    .iter()
+    .map(|x| x * 2)
+    .filter(|x| x % 2 == 0)
+    .collect();`}
+/>
+
+<Callout type="insight">
+Rust 迭代器是**惰性求值**的——`.map()` 和 `.filter()` 不立即执行，直到 `.collect()` 驱动消费。这让链式操作几乎无额外开销，等价于手写循环。
+</Callout>
+
+### Vec 常用操作
+
+```rust
+let mut v: Vec<String> = Vec::new();
+v.push(String::from("hello"));
+v.push(String::from("world"));
+
+// 索引访问（可能 panic）
+let first = &v[0];
+
+// 安全访问
+if let Some(val) = v.get(0) {
+    println!("{}", val);
+}
+
+// 遍历
+for item in &v {
+    println!("{}", item);
+}
+```
+
+## HashMap：键值存储
+
+```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, i32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
+// entry API：不存在才插入
+scores.entry(String::from("Charlie")).or_insert(70);
+
+// 统计词频（经典用法）
+let text = "hello world hello rust";
+let mut word_count: HashMap<&str, i32> = HashMap::new();
+for word in text.split_whitespace() {
+    let count = word_count.entry(word).or_insert(0);
+    *count += 1;
+}
+```
+
+<Callout type="tip">
+`entry().or_insert()` 返回值的**可变引用**，`*count += 1` 直接修改 HashMap 内部的值，无需二次查找——这是 Rust 常见的惯用法。
+</Callout>
+
+## 闭包：捕获环境的匿名函数
+
+<CompareBlock
+  jsTitle="JavaScript 箭头函数"
+  rustTitle="Rust 闭包"
+  js={`const threshold = 50;
+const passing = scores.filter(s => s > threshold);
+const grader = score => score >= 90 ? 'A' : 'B';`}
+  rust={`let threshold = 50;
+let passing: Vec<i32> = scores
+    .iter()
+    .filter(|&&s| s > threshold)  // 捕获 threshold
+    .copied()
+    .collect();
+
+let grader = |score: i32| if score >= 90 { 'A' } else { 'B' };`}
+/>
+
+Rust 闭包有三种捕获方式，编译器自动推断：
+
+| Trait | 捕获方式 | 类比 |
+|-------|---------|------|
+| `FnOnce` | 消耗捕获的值（move） | 只能调用一次 |
+| `FnMut` | 可变借用捕获的值 | 可多次调用，可修改 |
+| `Fn` | 不可变借用捕获的值 | 可多次调用，只读 |
+
+## 迭代器：零成本的链式操作
+
+迭代器适配器（adapters）不执行计算，消费适配器（consumers）触发计算：
+
+```rust
+let numbers = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+// 适配器：map、filter、take、skip、flat_map、zip...
+// 消费器：collect、sum、count、fold、any、all、find...
+let sum_of_even_squares: i32 = numbers
+    .iter()
+    .filter(|&&n| n % 2 == 0)   // 适配器
+    .map(|&n| n * n)             // 适配器
+    .sum();                       // 消费器
+
+// 等价于：
+let mut sum = 0;
+for n in &numbers {
+    if n % 2 == 0 { sum += n * n; }
+}
+// 编译后性能相同
+```
+
+<Callout type="note">
+`Iterator::collect()` 可以收集到任何实现了 `FromIterator` 的类型：`Vec<T>`、`HashMap<K,V>`、`String`、`HashSet<T>` 等。类型注解或 turbofish 语法 (`::<Vec<_>>`) 告诉编译器收集到哪种类型。
+</Callout>
+
+### 自定义迭代器
+
+```rust
+struct Counter {
+    count: u32,
+    max: u32,
+}
+
+impl Counter {
+    fn new(max: u32) -> Counter {
+        Counter { count: 0, max }
+    }
+}
+
+impl Iterator for Counter {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count < self.max {
+            self.count += 1;
+            Some(self.count)
+        } else {
+            None
+        }
+    }
+}
+
+// 自动获得所有迭代器方法
+let sum: u32 = Counter::new(5).zip(Counter::new(5).skip(1))
+    .map(|(a, b)| a * b)
+    .filter(|x| x % 3 == 0)
+    .sum();
+```
+
+## String vs &str
+
+```rust
+// String：堆分配，拥有所有权，可修改
+let mut owned: String = String::from("hello");
+owned.push_str(", world");
+
+// &str：字符串切片，借用，不可修改
+let borrowed: &str = "hello";          // 字符串字面量，'static 生命周期
+let slice: &str = &owned[0..5];        // 借用 String 的一部分
+
+// 函数参数推荐用 &str，更灵活
+fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+// greet("Alice")            -- &str 直接用
+// greet(&my_string)         -- String 自动解引用为 &str
+```
+
+<VideoPlaceholder
+  title="集合与迭代器实战演示"
+  description="从零构建日志分析器：读取日志文件、用 HashMap 统计错误类型、用迭代器链计算各级别日志占比"
+/>
+
+<ProjectCard
+  title="日志分析器"
+  description="读取结构化日志文件，用 HashMap 统计各错误级别（ERROR/WARN/INFO）的出现频次和占比，用迭代器链计算 Top 5 高频错误消息，最终输出格式化报告到终端。"
+  skills={["Vec", "HashMap", "闭包", "迭代器", "文件 I/O", "字符串处理"]}
+  startCommand="cargo new log-analyzer && cd log-analyzer"
+/>

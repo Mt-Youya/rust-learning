@@ -1,0 +1,157 @@
+export const frontmatter = {
+  title: "Generics, Traits, and Lifetimes",
+  subtitle: "The Secret of Zero-Cost Abstractions and Reference Safety",
+  chapter: 6,
+  slug: "generics",
+  duration: "4 hours",
+  project: "Word Frequency Counter",
+  status: "available",
+  description: "Generics eliminate duplicate code, Traits define shared behavior, and lifetime annotations verify reference safety — understand how the Rust compiler guarantees memory safety at zero runtime cost.",
+  prev: "errors",
+  next: "collections",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Generics: Write Once, Handle Multiple Types
+
+<CompareBlock
+  concept="Generic Functions"
+  jsLabel="TypeScript"
+  rustLabel="Rust"
+  js={`function largest<T extends number | string>(list: T[]): T {
+  return list.reduce((a, b) => a > b ? a : b);
+}`}
+  rust={`// T: PartialOrd is a Trait bound, equivalent to TypeScript's extends
+fn largest<T: PartialOrd>(list: &[T]) -> &T {
+    let mut largest = &list[0];
+    for item in list {
+        if item > largest {
+            largest = item;
+        }
+    }
+    largest
+}`}
+  insight="Rust generics are monomorphized at compile time — the compiler generates specialized code for each concrete type used, rather than using runtime polymorphism or virtual function dispatch. This is what zero-cost abstraction means."
+/>
+
+---
+
+## Traits: Defining Shared Behavior
+
+Traits are similar to TypeScript interfaces, but can have default implementations:
+
+```rust
+trait Summary {
+    fn author(&self) -> String;  // must be implemented
+    
+    // default implementation
+    fn summarize(&self) -> String {
+        format!("Author: {}", self.author())
+    }
+}
+
+struct Article { title: String, author: String }
+struct Tweet   { username: String, content: String }
+
+impl Summary for Article {
+    fn author(&self) -> String { self.author.clone() }
+    // uses the default implementation of summarize
+}
+
+impl Summary for Tweet {
+    fn author(&self) -> String { format!("@{}", self.username) }
+    fn summarize(&self) -> String {
+        format!("@{}: {}", self.username, self.content)
+    }
+}
+```
+
+Function parameters can accept any type that implements a Trait:
+
+```rust
+fn notify(item: &impl Summary) {
+    println!("{}", item.summarize());
+}
+```
+
+---
+
+## Iterators: Lazy, High-Performance Chained Operations
+
+<CompareBlock
+  concept="Collection Operations"
+  jsLabel="JavaScript"
+  rustLabel="Rust"
+  js={`// three passes, three intermediate arrays
+const result = [1,2,3,4,5,6,7,8,9,10]
+  .filter(x => x % 2 === 0)
+  .map(x => x * x)
+  .slice(0, 3);`}
+  rust={`// lazy evaluation, only triggered at collect, only one pass
+let result: Vec<i32> = (1..=10)
+    .filter(|x| x % 2 == 0)   // adapter: lazy
+    .map(|x| x * x)            // adapter: lazy
+    .take(3)                    // adapter: lazy
+    .collect();                 // consumer: triggers execution`}
+  insight="Rust iterators are lazy — the entire chain only traverses the data once, and LLVM can often auto-vectorize with SIMD. This is far more efficient than JavaScript's Array method chains, which create intermediate arrays at each step."
+/>
+
+Common iterator methods:
+
+```rust
+let v = vec![1, 2, 3, 4, 5];
+
+v.iter().sum::<i32>()                    // 15
+v.iter().any(|&x| x > 3)                // true
+v.iter().all(|&x| x > 0)                // true
+v.iter().max()                           // Some(5)
+v.iter().enumerate().for_each(|(i, x)| println!("{}: {}", i, x));
+v.iter().zip(&v).map(|(a, b)| a + b).collect::<Vec<_>>();
+v.iter().fold(0, |acc, x| acc + x)      // 15 (same as reduce)
+```
+
+---
+
+## Common Derive Traits
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Config {
+    host: String,
+    port: u16,
+}
+```
+
+The `#[derive]` macro automatically implements common Traits, eliminating the need to write boilerplate code by hand.
+
+---
+
+## Hands-On Project: Word Frequency Counter
+
+<ProjectCard
+  title="Word Frequency Counter"
+  description="Take a text input, use iterator chaining to count word frequencies, and output the Top 10 most frequent words — without writing a single for loop."
+  skills={["Iterator chaining", "HashMap fold", "sort_by custom sorting", "Closure captures"]}
+  command="cargo new word-freq && cd word-freq"
+  difficulty="Intermediate"
+  estimatedTime="45 minutes"
+/>
+
+---
+
+## Hands-On Video
+
+<VideoPlaceholder
+  title="Generics, Traits, and Iterators"
+  duration="20-minute deep dive"
+  description="Zero-cost abstraction principles, Trait objects vs. generics, and the performance advantages of lazy iterator evaluation."
+  src="/videos/ch06-generics.mp4"
+  subtitles="/subtitles/ch06-generics.vtt"
+/>

@@ -1,0 +1,159 @@
+export const frontmatter = {
+  title: "Variables, Types & Functions",
+  subtitle: "A Deep Dive into Rust's Type System",
+  chapter: 2,
+  slug: "variables",
+  duration: "3 hours",
+  project: "Grade Calculator CLI",
+  status: "available",
+  description: "Integer types, floating-point numbers, two forms of strings, tuples and arrays, functions and expressions — build a mental model of Rust's type system that goes deeper than TypeScript.",
+  prev: "basics",
+  next: "ownership",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## The Type System: One Layer Deeper Than TypeScript
+
+TypeScript's types disappear after compilation — at runtime it's still JavaScript, and types are just a development aid. In Rust, types are the core of the language. They affect memory layout, calling conventions, and performance characteristics. A type error is often an early warning about a memory safety issue.
+
+---
+
+## Integer Types
+
+Rust's integer types are organized by bit width — 8/16/32/64/128 bits — and each comes in a signed (`i`) and unsigned (`u`) variant:
+
+<CompareBlock
+  concept="Number Types"
+  jsLabel="TypeScript"
+  rustLabel="Rust"
+  js={`// TypeScript: all numbers are f64
+let count: number = 42;
+let price: number = 9.99;
+let big: bigint = 9007199254740993n;`}
+  rust={`// Rust: choose the right type
+let count: i32 = 42;        // 32-bit signed integer
+let price: f64 = 9.99;      // 64-bit float
+let age: u8 = 25;           // 0-255
+let big: i64 = 9_007_199_254_740_993; // underscores as separators`}
+  insight="Rust requires you to explicitly choose a type. This isn't verbose — it tells the compiler the memory layout, enabling better optimization and stricter checks."
+/>
+
+`isize` and `usize` match the machine word size (64 bits on a 64-bit system) and are used specifically for array indexing.
+
+---
+
+## Strings: Two Forms
+
+This is where frontend engineers are most likely to get confused.
+
+<CompareBlock
+  concept="Strings"
+  jsLabel="JavaScript"
+  rustLabel="Rust"
+  js={`// JS: strings are just one thing
+const hello = "hello";        // mutable, passable
+const world = hello + " world";
+console.log(world.length);`}
+  rust={`// Rust: strings come in two forms
+let hello: &str = "hello";    // string slice: immutable reference, lives in read-only memory
+let world: String = String::from("hello world"); // heap-allocated, modifiable
+
+// &str to String
+let owned = hello.to_string();
+
+// String to &str (auto-deref)
+let slice: &str = &world;`}
+  insight="&str is a view (borrowed), String is an owner (heap-allocated). Prefer &str for function parameters — it's more flexible; use String when you need to store or mutate."
+/>
+
+---
+
+## Variable Shadowing
+
+A unique Rust feature: rebind a variable using the same name with `let`, and you can even change its type:
+
+```rust
+let x = 5;
+let x = x + 1;          // shadowed, x is 6
+let x = x.to_string();  // shadowed, x is now a String
+println!("{}", x);       // "6"
+```
+
+This is different from reassigning a `let` in JavaScript. Rust's shadowing creates a new variable — you can change its type, and the immutability of the old binding still applies.
+
+---
+
+## Tuples and Arrays
+
+```rust
+// Tuples: fixed length, can hold different types
+let tup: (i32, f64, bool) = (500, 6.4, true);
+let (x, y, z) = tup;     // destructuring
+println!("{}", tup.0);    // dot-syntax access
+
+// Arrays: fixed length, same type (stack-allocated)
+let a: [i32; 5] = [1, 2, 3, 4, 5];
+println!("{}", a[0]);     // 0 → panic if out of bounds
+
+// Vec: dynamic size (heap-allocated), similar to JS Array
+let mut v = vec![1, 2, 3];
+v.push(4);
+println!("{}", v[3]);     // 4
+```
+
+---
+
+## Functions and Expressions
+
+In Rust, a block `{}` is an expression. The last line without a semicolon is its return value:
+
+```rust
+fn add(a: i32, b: i32) -> i32 {
+    a + b  // no return, no semicolon — this is the return value
+}
+
+// if is also an expression
+let result = if x > 0 { "positive" } else { "non-positive" };
+
+// block expression
+let y = {
+    let x = 3;
+    x + 1  // y = 4
+};
+```
+
+<Callout type="tip">
+  **Adding a semicolon turns it into a statement with no value**. If your function returns `()` when you expected a value, check whether you accidentally added a semicolon to the last line.
+</Callout>
+
+---
+
+## Project: Grade Calculator
+
+<ProjectCard
+  title="Grade Calculator CLI"
+  description="Parse a list of scores from command-line input, compute the average, map to letter grades using match, and format the output."
+  skills={["Integer/float type conversion", "Vec collections", "match pattern matching", "Function composition", "Command-line arguments"]}
+  command="cargo new grade-calc && cd grade-calc"
+  difficulty="Beginner"
+  estimatedTime="30 minutes"
+/>
+
+---
+
+## Video Walkthrough
+
+<VideoPlaceholder
+  title="Rust Variables and the Type System"
+  duration="20-minute deep dive"
+  description="Choosing integer types, two forms of strings, and the core difference between expressions and statements."
+  src="/videos/ch02-variables.mp4"
+  subtitles="/subtitles/ch02-variables.vtt"
+/>

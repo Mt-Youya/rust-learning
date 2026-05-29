@@ -1,0 +1,208 @@
+export const frontmatter = {
+  title: "Collections and Functional Programming",
+  subtitle: "Vec · HashMap · Closures · Iterator Chains",
+  chapter: 7,
+  slug: "collections",
+  duration: "3 hours",
+  project: "Log Analyzer",
+  status: "available",
+  description: "Vec dynamic arrays, HashMap key-value storage, closure environment capture, lazy iterator chaining — write concise and efficient Rust code with a functional mindset.",
+  prev: "generics",
+  next: "concurrency",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Vec: Rust's Dynamic Array
+
+`Vec<T>` is Rust's most commonly used collection, similar to JavaScript's `Array`, but with strict type constraints and ownership semantics.
+
+<CompareBlock
+  jsTitle="JavaScript Array"
+  rustTitle="Rust Vec"
+  js={`const nums = [1, 2, 3];
+nums.push(4);
+const doubled = nums.map(x => x * 2);
+const evens = doubled.filter(x => x % 2 === 0);`}
+  rust={`let mut nums = vec![1, 2, 3];
+nums.push(4);
+let result: Vec<i32> = nums
+    .iter()
+    .map(|x| x * 2)
+    .filter(|x| x % 2 == 0)
+    .collect();`}
+/>
+
+<Callout type="insight">
+Rust iterators are **lazily evaluated** — `.map()` and `.filter()` do not execute immediately; computation is only triggered when `.collect()` drives consumption. This makes chaining nearly zero-overhead, equivalent to a hand-written loop.
+</Callout>
+
+### Common Vec Operations
+
+```rust
+let mut v: Vec<String> = Vec::new();
+v.push(String::from("hello"));
+v.push(String::from("world"));
+
+// index access (may panic)
+let first = &v[0];
+
+// safe access
+if let Some(val) = v.get(0) {
+    println!("{}", val);
+}
+
+// iterate
+for item in &v {
+    println!("{}", item);
+}
+```
+
+## HashMap: Key-Value Storage
+
+```rust
+use std::collections::HashMap;
+
+let mut scores: HashMap<String, i32> = HashMap::new();
+scores.insert(String::from("Alice"), 100);
+scores.insert(String::from("Bob"), 85);
+
+// entry API: insert only if absent
+scores.entry(String::from("Charlie")).or_insert(70);
+
+// word frequency count (classic usage)
+let text = "hello world hello rust";
+let mut word_count: HashMap<&str, i32> = HashMap::new();
+for word in text.split_whitespace() {
+    let count = word_count.entry(word).or_insert(0);
+    *count += 1;
+}
+```
+
+<Callout type="tip">
+`entry().or_insert()` returns a **mutable reference** to the value. `*count += 1` directly modifies the value inside the HashMap without a second lookup — this is a common Rust idiom.
+</Callout>
+
+## Closures: Anonymous Functions That Capture Their Environment
+
+<CompareBlock
+  jsTitle="JavaScript Arrow Functions"
+  rustTitle="Rust Closures"
+  js={`const threshold = 50;
+const passing = scores.filter(s => s > threshold);
+const grader = score => score >= 90 ? 'A' : 'B';`}
+  rust={`let threshold = 50;
+let passing: Vec<i32> = scores
+    .iter()
+    .filter(|&&s| s > threshold)  // captures threshold
+    .copied()
+    .collect();
+
+let grader = |score: i32| if score >= 90 { 'A' } else { 'B' };`}
+/>
+
+Rust closures have three capture modes, inferred automatically by the compiler:
+
+| Trait | Capture Mode | Analogy |
+|-------|-------------|---------|
+| `FnOnce` | Consumes captured values (move) | Can only be called once |
+| `FnMut` | Mutably borrows captured values | Can be called multiple times, allows mutation |
+| `Fn` | Immutably borrows captured values | Can be called multiple times, read-only |
+
+## Iterators: Zero-Cost Chaining
+
+Iterator adapters do not perform computation; consumers trigger it:
+
+```rust
+let numbers = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+// adapters: map, filter, take, skip, flat_map, zip...
+// consumers: collect, sum, count, fold, any, all, find...
+let sum_of_even_squares: i32 = numbers
+    .iter()
+    .filter(|&&n| n % 2 == 0)   // adapter
+    .map(|&n| n * n)             // adapter
+    .sum();                       // consumer
+
+// equivalent to:
+let mut sum = 0;
+for n in &numbers {
+    if n % 2 == 0 { sum += n * n; }
+}
+// identical performance after compilation
+```
+
+<Callout type="note">
+`Iterator::collect()` can gather results into any type that implements `FromIterator`: `Vec<T>`, `HashMap<K,V>`, `String`, `HashSet<T>`, and more. A type annotation or turbofish syntax (`::<Vec<_>>`) tells the compiler which type to collect into.
+</Callout>
+
+### Custom Iterators
+
+```rust
+struct Counter {
+    count: u32,
+    max: u32,
+}
+
+impl Counter {
+    fn new(max: u32) -> Counter {
+        Counter { count: 0, max }
+    }
+}
+
+impl Iterator for Counter {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.count < self.max {
+            self.count += 1;
+            Some(self.count)
+        } else {
+            None
+        }
+    }
+}
+
+// automatically gains all iterator methods
+let sum: u32 = Counter::new(5).zip(Counter::new(5).skip(1))
+    .map(|(a, b)| a * b)
+    .filter(|x| x % 3 == 0)
+    .sum();
+```
+
+## String vs &str
+
+```rust
+// String: heap-allocated, owned, mutable
+let mut owned: String = String::from("hello");
+owned.push_str(", world");
+
+// &str: string slice, borrowed, immutable
+let borrowed: &str = "hello";          // string literal, 'static lifetime
+let slice: &str = &owned[0..5];        // borrow a portion of a String
+
+// prefer &str for function parameters — more flexible
+fn greet(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+// greet("Alice")            -- &str used directly
+// greet(&my_string)         -- String auto-derefs to &str
+```
+
+<VideoPlaceholder
+  title="Collections and Iterators in Practice"
+  description="Build a log analyzer from scratch: read log files, use HashMap to count error types, and use iterator chains to calculate the percentage of each log level"
+/>
+
+<ProjectCard
+  title="Log Analyzer"
+  description="Read structured log files, use HashMap to count the frequency and percentage of each error level (ERROR/WARN/INFO), use iterator chains to calculate the Top 5 most frequent error messages, and output a formatted report to the terminal."
+  skills={["Vec", "HashMap", "Closures", "Iterators", "File I/O", "String Processing"]}
+  startCommand="cargo new log-analyzer && cd log-analyzer"
+/>

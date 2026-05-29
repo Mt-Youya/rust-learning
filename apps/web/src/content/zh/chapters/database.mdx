@@ -1,0 +1,369 @@
+export const frontmatter = {
+  title: "数据库与持久化",
+  subtitle: "SQLx + PostgreSQL 类型安全查询",
+  chapter: 13,
+  slug: "database",
+  duration: "4 小时",
+  project: "数据访问层实战",
+  status: "available",
+  description: "类型安全的数据库查询、迁移管理、连接池——告别 ORM 魔法，掌握真正的数据控制权。",
+  prev: "web-backend",
+  next: "auth",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 为什么用 SQLx 而不是 ORM？
+
+前端世界习惯 Prisma、TypeORM 这类 ORM——方便，但黑盒。
+**SQLx** 是 Rust 最流行的数据库库，核心特性：**在编译期验证你的 SQL**。
+
+```
+你写的 SQL 有语法错误？→ 编译失败
+查询结果类型和 Rust 结构体不匹配？→ 编译失败
+引用了不存在的列？→ 编译失败
+```
+
+没有运行时惊喜，没有类型转换魔法。
+
+```toml
+# Cargo.toml
+[dependencies]
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "uuid", "time", "migrate"] }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+```
+
+---
+
+## 连接与连接池
+
+<CompareBlock
+  concept="数据库连接"
+  jsLabel="Node.js（pg / Prisma）"
+  rustLabel="SQLx（PgPool）"
+  js={`// Node.js：连接池通常隐藏在 ORM 里
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+
+// 或者 pg 直接用
+import { Pool } from 'pg';
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });`}
+  rust={`use sqlx::PgPool;
+
+#[tokio::main]
+async fn main() {
+    // 从环境变量读取连接字符串
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL 未设置");
+
+    // 创建连接池（最多 10 个连接）
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("无法连接数据库");
+
+    // pool 可以 clone（内部是 Arc），自由传递
+    println!("数据库连接成功");
+}`}
+  insight="SQLx 的连接池是 Arc 包装的，可以安全 clone 传递给多个 handler。`PgPool::connect` 会自动根据 URL 参数配置池大小，也可以用 `PgPoolOptions` 精细控制。"
+/>
+
+---
+
+## 数据库迁移
+
+SQLx 内置迁移管理，类似 Prisma Migrate 但更透明：
+
+```bash
+# 安装 SQLx CLI
+cargo install sqlx-cli
+
+# 创建迁移文件
+sqlx migrate add create_users_table
+sqlx migrate add create_posts_table
+
+# 运行迁移
+sqlx migrate run
+
+# 回滚
+sqlx migrate revert
+```
+
+```sql
+-- migrations/20240101_create_users_table.sql
+CREATE TABLE users (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    email      TEXT        NOT NULL UNIQUE,
+    username   TEXT        NOT NULL UNIQUE,
+    password_hash TEXT     NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- migrations/20240102_create_posts_table.sql
+CREATE TABLE posts (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    author_id  UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title      TEXT        NOT NULL,
+    content    TEXT        NOT NULL DEFAULT '',
+    published  BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX posts_author_idx ON posts(author_id);
+CREATE INDEX posts_published_idx ON posts(published);
+```
+
+<Callout type="tip">
+  在代码里用 `sqlx::migrate!()` 宏，可以在应用启动时自动运行所有待执行迁移，非常适合 CI/CD 流程。
+</Callout>
+
+---
+
+## 查询：query! 宏的编译期验证
+
+```rust
+use sqlx::PgPool;
+use uuid::Uuid;
+use time::OffsetDateTime;
+
+#[derive(Debug, sqlx::FromRow)]
+struct User {
+    id:            Uuid,
+    email:         String,
+    username:      String,
+    created_at:    OffsetDateTime,
+}
+
+// query! 宏在编译时连接数据库验证 SQL
+// 需要设置 DATABASE_URL 环境变量（开发时用 .env）
+async fn find_user_by_email(pool: &PgPool, email: &str) -> sqlx::Result<Option<User>> {
+    let user = sqlx::query_as!(
+        User,
+        r#"
+        SELECT id, email, username, created_at
+        FROM users
+        WHERE email = $1
+        "#,
+        email
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user)
+}
+
+// 插入数据
+async fn create_user(
+    pool: &PgPool,
+    email: &str,
+    username: &str,
+    password_hash: &str,
+) -> sqlx::Result<User> {
+    let user = sqlx::query_as!(
+        User,
+        r#"
+        INSERT INTO users (email, username, password_hash)
+        VALUES ($1, $2, $3)
+        RETURNING id, email, username, created_at
+        "#,
+        email, username, password_hash
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(user)
+}
+```
+
+### fetch 方法选择
+
+| 方法 | 用途 | 结果数量 |
+|------|------|---------|
+| `fetch_one` | 期望恰好一条结果 | 0条 → Error |
+| `fetch_optional` | 可能没有结果 | 返回 `Option<T>` |
+| `fetch_all` | 返回所有结果 | 返回 `Vec<T>` |
+| `fetch` | 流式处理大量结果 | 返回 `Stream<T>` |
+| `execute` | INSERT/UPDATE/DELETE | 返回影响行数 |
+
+---
+
+## 事务处理
+
+```rust
+async fn transfer_credits(
+    pool: &PgPool,
+    from_id: Uuid,
+    to_id:   Uuid,
+    amount:  i64,
+) -> sqlx::Result<()> {
+    // 开启事务
+    let mut tx = pool.begin().await?;
+
+    // 扣减发送方余额
+    sqlx::query!(
+        "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+        amount, from_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 增加接收方余额
+    sqlx::query!(
+        "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+        amount, to_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // 提交事务（如果中途出错，tx drop 时自动回滚）
+    tx.commit().await?;
+    Ok(())
+}
+```
+
+---
+
+## 与 Axum 集成
+
+把 `PgPool` 作为 AppState 传入，每个 handler 通过 `State` 提取器使用：
+
+```rust
+use axum::{extract::{Path, State}, routing::get, Json, Router};
+use sqlx::PgPool;
+
+#[derive(Clone)]
+struct AppState { db: PgPool }
+
+#[tokio::main]
+async fn main() {
+    // 自动读取 .env 文件（开发环境）
+    dotenvy::dotenv().ok();
+    let database_url = std::env::var("DATABASE_URL").unwrap();
+
+    let pool = PgPool::connect(&database_url).await.unwrap();
+
+    // 启动时自动运行迁移
+    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+    let state = AppState { db: pool };
+
+    let app = Router::new()
+        .route("/users/:id", get(get_user))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn get_user(
+    State(state): State<AppState>,
+    Path(id):     Path<Uuid>,
+) -> Result<Json<User>, StatusCode> {
+    sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+```
+
+---
+
+## 实战项目：用户认证系统
+
+<ProjectCard
+  title="用户认证系统"
+  description="实现完整的注册/登录/验证流程：bcrypt 密码哈希、JWT 生成与验证、受保护路由。"
+  skills={["SQLx 查询", "bcrypt 密码哈希", "JWT (jsonwebtoken)", "事务", "Axum 中间件"]}
+  command="cargo new auth-service && cd auth-service"
+  difficulty="中级"
+  estimatedTime="90 分钟"
+/>
+
+```toml
+# Cargo.toml 关键依赖
+[dependencies]
+sqlx       = { version = "0.8", features = ["postgres", "runtime-tokio", "uuid", "time"] }
+bcrypt     = "0.15"
+jsonwebtoken = "9"
+axum       = "0.8"
+tokio      = { version = "1", features = ["full"] }
+serde      = { version = "1", features = ["derive"] }
+dotenvy    = "0.15"
+```
+
+```rust
+// src/auth.rs — 核心认证逻辑
+
+use bcrypt::{hash, verify, DEFAULT_COST};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+const JWT_SECRET: &[u8] = b"your-secret-key-change-in-production";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,   // subject = user id
+    exp: usize,    // 过期时间（Unix timestamp）
+}
+
+pub fn hash_password(password: &str) -> bcrypt::BcryptResult<String> {
+    hash(password, DEFAULT_COST)
+}
+
+pub fn verify_password(password: &str, hash: &str) -> bool {
+    verify(password, hash).unwrap_or(false)
+}
+
+pub fn generate_jwt(user_id: Uuid) -> String {
+    let expiration = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::days(7))
+        .unwrap()
+        .timestamp() as usize;
+
+    let claims = Claims { sub: user_id.to_string(), exp: expiration };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(JWT_SECRET)).unwrap()
+}
+
+pub fn verify_jwt(token: &str) -> Result<Uuid, ()> {
+    decode::<Claims>(token, &DecodingKey::from_secret(JWT_SECRET), &Validation::default())
+        .map_err(|_| ())?
+        .claims
+        .sub
+        .parse::<Uuid>()
+        .map_err(|_| ())
+}
+```
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="SQLx 数据库：编译期 SQL 验证"
+  duration="1 分 5 秒精讲"
+  description="SQLx query! 宏、连接池、迁移、事务。"
+  src="/videos/ch05-database.mp4"
+  subtitles="/subtitles/ch05-database.vtt"
+/>
+
+---
+
+## 本章小结
+
+- ✓ SQLx 连接池与环境变量配置
+- ✓ 数据库迁移管理（sqlx-cli）
+- ✓ `query!` / `query_as!` 编译期 SQL 验证
+- ✓ 事务处理与错误回滚
+- ✓ 与 Axum AppState 集成
+- ✓ bcrypt 密码哈希 + JWT 认证
+
+下一章：[全栈项目实战](/chapter/fullstack)——把 Next.js 前端和 Rust 后端组合成一个完整应用。

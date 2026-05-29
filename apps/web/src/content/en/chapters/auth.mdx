@@ -1,0 +1,230 @@
+export const frontmatter = {
+  title: "Authentication & Security",
+  subtitle: "JWT · OAuth2 · RBAC · Security Middleware",
+  chapter: 14,
+  slug: "auth",
+  duration: "3 hours",
+  project: "Complete User Authentication Service",
+  status: "available",
+  description: "JWT token issuance and verification, OAuth2 third-party login, role-based access control (RBAC), password hashing, rate limiting — use Rust's type system to eliminate security vulnerabilities at compile time.",
+  prev: "database",
+  next: "project-fullstack",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Password Security: bcrypt / Argon2
+
+Never store plaintext passwords. The Rust ecosystem provides security-audited hashing libraries:
+
+```toml
+[dependencies]
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["std"] }
+```
+
+```rust
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+
+pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    Ok(argon2.hash_password(password.as_bytes(), &salt)?.to_string())
+}
+
+pub fn verify_password(password: &str, hash: &str) -> bool {
+    let parsed_hash = PasswordHash::new(hash).unwrap();
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok()
+}
+```
+
+<Callout type="warning">
+Use `Argon2id` (the default) instead of `bcrypt` — Argon2id won the 2015 Password Hashing Competition and is far more resistant to GPU brute-force attacks. Always use library functions; never implement hashing yourself.
+</Callout>
+
+## JWT Authentication
+
+```toml
+[dependencies]
+jsonwebtoken = "9"
+serde = { version = "1", features = ["derive"] }
+```
+
+```rust
+use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,     // subject (user ID)
+    pub role: String,    // user role
+    pub exp: usize,      // expiration time (Unix timestamp)
+}
+
+pub fn create_token(user_id: &str, role: &str, secret: &[u8]) -> String {
+    let expiration = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::hours(24))
+        .unwrap()
+        .timestamp() as usize;
+
+    let claims = Claims {
+        sub: user_id.to_owned(),
+        role: role.to_owned(),
+        exp: expiration,
+    };
+
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).unwrap()
+}
+
+pub fn verify_token(token: &str, secret: &[u8]) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret),
+        &Validation::default(),
+    )?;
+    Ok(token_data.claims)
+}
+```
+
+## Axum JWT Middleware
+
+```rust
+use axum::{
+    extract::{Request, State},
+    http::StatusCode,
+    middleware::Next,
+    response::Response,
+};
+
+pub async fn auth_middleware(
+    State(secret): State<Vec<u8>>,
+    mut req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let claims = verify_token(token, &secret)
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    // Inject claims into request extensions so downstream handlers can extract them
+    req.extensions_mut().insert(claims);
+    Ok(next.run(req).await)
+}
+```
+
+<CompareBlock
+  jsTitle="Express.js JWT Middleware"
+  rustTitle="Axum JWT Middleware"
+  js={`app.use((req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});`}
+  rust={`// Axum's type system guarantees: routes that don't pass through auth_middleware
+// cannot access user info via the Extension<Claims> extractor.
+// Forgetting to add the auth middleware is caught at compile time.
+
+async fn protected_handler(
+    Extension(claims): Extension<Claims>,
+) -> String {
+    format!("Hello, {}!", claims.sub)
+}`}
+/>
+
+## RBAC: Role-Based Access Control
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Role {
+    Admin,
+    User,
+    Guest,
+}
+
+impl Role {
+    pub fn can(&self, action: &str) -> bool {
+        match (self, action) {
+            (Role::Admin, _) => true,
+            (Role::User, "read" | "write") => true,
+            (Role::Guest, "read") => true,
+            _ => false,
+        }
+    }
+}
+
+// Role extractor middleware
+pub async fn require_role(
+    Extension(claims): Extension<Claims>,
+    State(required_role): State<Role>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let user_role: Role = claims.role.parse().map_err(|_| StatusCode::FORBIDDEN)?;
+    if user_role == required_role || user_role == Role::Admin {
+        Ok(next.run(req).await)
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+```
+
+## Rate Limiting
+
+```toml
+[dependencies]
+tower-governor = "0.4"
+```
+
+```rust
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+
+let governor_conf = Box::new(
+    GovernorConfigBuilder::default()
+        .per_second(2)    // max 2 requests per second
+        .burst_size(5)    // allow a burst of 5
+        .finish()
+        .unwrap(),
+);
+
+let app = Router::new()
+    .route("/login", post(login_handler))
+    .layer(GovernorLayer { config: governor_conf });
+```
+
+<Callout type="tip">
+Rate limiting should be configured separately on authentication routes (`/login`, `/register`) with stricter limits than the global default — this prevents brute-force attacks without degrading performance for ordinary API routes.
+</Callout>
+
+<VideoPlaceholder
+  title="JWT Authentication System in Practice"
+  description="End-to-end walkthrough from registration and login to protected routes: Argon2 password hashing, JWT issuance, middleware verification, and RBAC permission control"
+/>
+
+<ProjectCard
+  title="Complete User Authentication Service"
+  description="Build a complete authentication microservice with registration (Argon2 password hashing), login (JWT issuance), token refresh, protected routes (middleware verification), and role-based access control (Admin/User/Guest)."
+  skills={["Argon2", "JWT", "Axum Middleware", "RBAC", "Rate Limiting", "SQLx"]}
+  startCommand="cargo new auth-service && cd auth-service"
+/>

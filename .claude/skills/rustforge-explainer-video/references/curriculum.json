@@ -1,0 +1,130 @@
+{
+  "course": "RustForge",
+  "audience": "2–5 年经验的前端工程师（React / Vue / TypeScript）",
+  "chapters": [
+    {
+      "chapter": 1,
+      "slug": "basics",
+      "title": "入门",
+      "content": "rustup、Cargo 工作流，对比 npm/Node.js",
+      "module": "模块一 · Rust 核心基础"
+    },
+    {
+      "chapter": 2,
+      "slug": "variables",
+      "title": "变量与类型",
+      "content": "变量绑定、基础类型、模式匹配",
+      "module": "模块一 · Rust 核心基础"
+    },
+    {
+      "chapter": 3,
+      "slug": "ownership",
+      "title": "所有权",
+      "content": "所有权规则、移动/拷贝、借用、切片",
+      "module": "模块一 · Rust 核心基础"
+    },
+    {
+      "chapter": 4,
+      "slug": "structs-enums",
+      "title": "结构体与枚举",
+      "content": "struct、enum、impl、trait",
+      "module": "模块一 · Rust 核心基础"
+    },
+    {
+      "chapter": 5,
+      "slug": "error-handling",
+      "title": "错误处理",
+      "content": "Result、Option、? 运算符",
+      "module": "模块二 · Rust 进阶"
+    },
+    {
+      "chapter": 6,
+      "slug": "generics-traits",
+      "title": "泛型与 Trait",
+      "content": "泛型、trait bounds、生命周期入门",
+      "module": "模块二 · Rust 进阶"
+    },
+    {
+      "chapter": 7,
+      "slug": "async-programming",
+      "title": "异步编程",
+      "content": "async/await、Tokio，对比 Promise",
+      "module": "模块二 · Rust 进阶"
+    },
+    {
+      "chapter": 8,
+      "slug": "web-backend",
+      "title": "Web 后端",
+      "content": "Axum、REST API、中间件",
+      "module": "模块三 · 全栈工程"
+    },
+    {
+      "chapter": 9,
+      "slug": "database",
+      "title": "数据库",
+      "content": "SQLx、连接池、迁移",
+      "module": "模块三 · 全栈工程"
+    },
+    {
+      "chapter": 10,
+      "slug": "fullstack",
+      "title": "全栈",
+      "content": "Leptos / Next.js + Rust API 集成",
+      "module": "模块三 · 全栈工程"
+    },
+    {
+      "chapter": 11,
+      "slug": "devops",
+      "title": "DevOps",
+      "content": "Docker、CI/CD、部署",
+      "module": "模块四 · 生产实践"
+    },
+    {
+      "chapter": 12,
+      "slug": "ai-integration",
+      "title": "AI 集成",
+      "content": "调用 LLM API、RAG 实现",
+      "module": "模块四 · 生产实践"
+    },
+    {
+      "chapter": 13,
+      "slug": "smart-pointers",
+      "title": "智能指针",
+      "content": "Box、Rc、RefCell",
+      "module": "模块二 · Rust 进阶"
+    },
+    {
+      "chapter": 14,
+      "slug": "performance",
+      "title": "性能优化",
+      "content": "Profiling、零拷贝、SIMD",
+      "module": "模块四 · 生产实践"
+    },
+    {
+      "chapter": 15,
+      "slug": "testing",
+      "title": "测试",
+      "content": "单元测试、集成测试、基准测试",
+      "module": "模块三 · 全栈工程"
+    },
+    {
+      "chapter": 16,
+      "slug": "webassembly",
+      "title": "WebAssembly",
+      "content": "wasm-bindgen、在浏览器中运行 Rust",
+      "module": "模块四 · 生产实践"
+    }
+  ],
+  "project_paths": [
+    "apps/web/src/content/chapters/{slug}.mdx",
+    "apps/web/src/data/curriculum.ts",
+    "apps/web/src/components/animations/",
+    "apps/web/src/components/chapters/",
+    "scripts/gen_audio.py",
+    "scripts/gen_video.py",
+    "scripts/gen_video_3min.py",
+    "scripts/cosyvoice_tts.py",
+    "apps/web/public/videos/",
+    "apps/web/public/subtitles/"
+  ]
+}

@@ -1,0 +1,410 @@
+export const frontmatter = {
+  title: "Web 后端",
+  subtitle: "用 Axum 构建生产级 REST API",
+  chapter: 12,
+  slug: "web-backend",
+  duration: "5 小时",
+  project: "博客 REST API",
+  status: "available",
+  description: "Axum 框架、路由、提取器、中间件——构建你第一个生产级 Rust Web 服务。JWT 认证将在下一章单独深入。",
+  prev: "cli",
+  next: "database",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 为什么选 Axum？
+
+Rust Web 框架有多个选择：Actix-web（极致性能）、Rocket（宏魔法）、Warp（函数式）。
+**Axum** 是 Tokio 团队官方出品，与 Tokio 生态无缝集成，API 设计接近 Express/Hono，是最适合前端工程师的切入点。
+
+```toml
+# Cargo.toml
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+```
+
+---
+
+## Hello World：最简 Axum 服务
+
+<CompareBlock
+  concept="基础 HTTP 服务器"
+  jsLabel="Express.js"
+  rustLabel="Axum"
+  js={`import express from 'express';
+const app = express();
+app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.json({ message: 'Hello World' });
+});
+
+app.listen(3000, () => {
+  console.log('Server on port 3000');
+});`}
+  rust={`use axum::{routing::get, Json, Router};
+use serde_json::{json, Value};
+
+async fn root() -> Json<Value> {
+    Json(json!({ "message": "Hello World" }))
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new().route("/", get(root));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await.unwrap();
+    println!("Server on port 3000");
+    axum::serve(listener, app).await.unwrap();
+}`}
+  insight="结构几乎一致：Router → 路由 → Handler。区别是 Axum 的 handler 是普通 async fn，参数通过提取器（Extractor）注入，比 Express 的 (req, res) 更类型安全。"
+/>
+
+---
+
+## 路由系统
+
+```rust
+use axum::{
+    routing::{get, post, put, delete},
+    Router,
+};
+
+// 路由嵌套，类似 Express Router
+pub fn posts_router() -> Router {
+    Router::new()
+        .route("/posts",          get(list_posts).post(create_post))
+        .route("/posts/:id",      get(get_post).put(update_post).delete(delete_post))
+}
+
+// 组合多个路由
+let app = Router::new()
+    .nest("/api/v1", posts_router())
+    .nest("/api/v1", users_router())
+    .route("/health", get(|| async { "ok" }));
+```
+
+---
+
+## 提取器（Extractors）：类型安全的参数注入
+
+Axum 最优雅的设计——handler 的参数自动从请求中提取，编译期保证类型正确：
+
+```rust
+use axum::{
+    extract::{Path, Query, State, Json},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+
+// 路径参数
+async fn get_post(Path(id): Path<u32>) -> String {
+    format!("Post #{id}")
+}
+
+// 查询参数
+#[derive(Deserialize)]
+struct Pagination { page: Option<u32>, per_page: Option<u32> }
+
+async fn list_posts(Query(params): Query<Pagination>) -> String {
+    format!("Page {:?}, size {:?}", params.page, params.per_page)
+}
+
+// JSON 请求体
+#[derive(Deserialize)]
+struct CreatePost { title: String, content: String }
+
+#[derive(Serialize)]
+struct Post { id: u32, title: String, content: String }
+
+async fn create_post(
+    Json(body): Json<CreatePost>,
+) -> (StatusCode, Json<Post>) {
+    let post = Post { id: 1, title: body.title, content: body.content };
+    (StatusCode::CREATED, Json(post))
+}
+```
+
+<Callout type="tip">
+  **多个提取器**：handler 可以有多个参数，每个都是一种提取器。Axum 按顺序提取，只要不重复消费 body（JSON body 只能提取一次）就可以自由组合。
+</Callout>
+
+---
+
+## 共享状态：AppState
+
+Web 服务通常需要共享数据库连接池、配置等。Axum 用 `State` 提取器优雅处理：
+
+```rust
+use axum::extract::State;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+// 应用状态（将来换成数据库连接池）
+#[derive(Clone)]
+struct AppState {
+    posts: Arc<RwLock<Vec<Post>>>,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        posts: Arc::new(RwLock::new(Vec::new())),
+    };
+
+    let app = Router::new()
+        .route("/posts", get(list_posts).post(create_post))
+        .with_state(state);  // 注入状态
+
+    // ...
+}
+
+async fn list_posts(
+    State(state): State<AppState>,  // 自动注入
+) -> Json<Vec<Post>> {
+    let posts = state.posts.read().await;
+    Json(posts.clone())
+}
+
+async fn create_post(
+    State(state): State<AppState>,
+    Json(body): Json<CreatePost>,
+) -> (StatusCode, Json<Post>) {
+    let post = Post { id: 1, title: body.title, content: body.content };
+    state.posts.write().await.push(post.clone());
+    (StatusCode::CREATED, Json(post))
+}
+```
+
+---
+
+## 错误处理：统一的 AppError
+
+Rust 的错误处理哲学：错误是值，不是异常。在 Web 服务中，统一错误类型让代码更干净：
+
+```rust
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
+use serde_json::json;
+
+// 统一错误类型
+pub enum AppError {
+    NotFound(String),
+    Unauthorized,
+    BadRequest(String),
+    Internal(String),
+}
+
+// 转换为 HTTP 响应
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::NotFound(msg)   => (StatusCode::NOT_FOUND, msg),
+            AppError::Unauthorized    => (StatusCode::UNAUTHORIZED, "未授权".into()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Internal(msg)   => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+
+        (status, Json(json!({ "error": message }))).into_response()
+    }
+}
+
+// handler 直接返回 Result，错误自动转换
+async fn get_post(Path(id): Path<u32>) -> Result<Json<Post>, AppError> {
+    let post = find_post(id)
+        .ok_or_else(|| AppError::NotFound(format!("Post #{id} 不存在")))?;
+    Ok(Json(post))
+}
+```
+
+---
+
+## 中间件：Tower Layer
+
+Axum 的中间件基于 `tower`，和 Express middleware 概念一致：
+
+```rust
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use axum::middleware;
+
+// 内置中间件：CORS + 日志
+let app = Router::new()
+    .route("/posts", get(list_posts))
+    .layer(CorsLayer::permissive())    // CORS
+    .layer(TraceLayer::new_for_http()) // 请求日志
+
+// 自定义中间件：JWT 验证
+async fn auth_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<Response, AppError> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(AppError::Unauthorized)?;
+
+    verify_jwt(token).map_err(|_| AppError::Unauthorized)?;
+    Ok(next.run(req).await)
+}
+
+// 只对特定路由应用验证
+let app = Router::new()
+    .route("/posts", get(list_posts))
+    .route("/posts", post(create_post)
+        .route_layer(middleware::from_fn(auth_middleware))); // 仅 POST 需要鉴权
+```
+
+---
+
+## 实战项目：博客 REST API
+
+<ProjectCard
+  title="博客 REST API"
+  description="用 Axum 构建完整的博客后端，包含文章 CRUD、标签过滤、JWT 认证，内存存储（下一章接数据库）。"
+  skills={["Axum Router", "Extractor", "AppState", "AppError", "CORS 中间件", "JWT 基础"]}
+  command="cargo new blog-api && cd blog-api"
+  difficulty="中级"
+  estimatedTime="90 分钟"
+/>
+
+```rust
+// 完整 API 结构预览
+// GET    /api/posts          — 文章列表（支持 ?tag=rust 过滤）
+// POST   /api/posts          — 创建文章（需要 JWT）
+// GET    /api/posts/:id      — 文章详情
+// PUT    /api/posts/:id      — 更新文章（需要 JWT）
+// DELETE /api/posts/:id      — 删除文章（需要 JWT）
+// POST   /api/auth/login     — 登录，返回 JWT token
+
+use axum::{extract::{Path, Query, State}, routing::{get, post}, Json, Router};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Post {
+    id:      u32,
+    title:   String,
+    content: String,
+    tags:    Vec<String>,
+    author:  String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    posts:   Arc<RwLock<Vec<Post>>>,
+    next_id: Arc<RwLock<u32>>,
+}
+
+impl AppState {
+    fn new() -> Self {
+        Self {
+            posts:   Arc::new(RwLock::new(Vec::new())),
+            next_id: Arc::new(RwLock::new(1)),
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState::new();
+
+    let app = Router::new()
+        .route("/api/posts",     get(list_posts).post(create_post))
+        .route("/api/posts/:id", get(get_post))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    println!("博客 API 启动于 http://localhost:3000");
+    axum::serve(listener, app).await.unwrap();
+}
+
+#[derive(Deserialize)]
+struct ListQuery { tag: Option<String> }
+
+async fn list_posts(
+    State(s): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Json<Vec<Post>> {
+    let posts = s.posts.read().await;
+    let result: Vec<Post> = match &q.tag {
+        Some(tag) => posts.iter().filter(|p| p.tags.contains(tag)).cloned().collect(),
+        None      => posts.clone(),
+    };
+    Json(result)
+}
+
+async fn get_post(
+    State(s): State<AppState>,
+    Path(id): Path<u32>,
+) -> Result<Json<Post>, StatusCode> {
+    let posts = s.posts.read().await;
+    posts.iter()
+        .find(|p| p.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Deserialize)]
+struct CreatePostBody { title: String, content: String, tags: Vec<String> }
+
+async fn create_post(
+    State(s): State<AppState>,
+    Json(body): Json<CreatePostBody>,
+) -> (StatusCode, Json<Post>) {
+    let mut next_id = s.next_id.write().await;
+    let post = Post {
+        id:      *next_id,
+        title:   body.title,
+        content: body.content,
+        tags:    body.tags,
+        author:  "admin".to_string(),
+    };
+    *next_id += 1;
+    s.posts.write().await.push(post.clone());
+    (StatusCode::CREATED, Json(post))
+}
+```
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="Axum Web 后端：REST API 实战"
+  duration="56 秒精讲"
+  description="Axum 路由、提取器、错误处理、中间件。"
+  src="/videos/ch04-web-backend.mp4"
+  subtitles="/subtitles/ch04-web-backend.vtt"
+/>
+
+---
+
+## 本章小结
+
+- ✓ Axum 路由系统与 Express 的对比
+- ✓ 提取器：Path / Query / Json / State
+- ✓ 统一错误类型 AppError + IntoResponse
+- ✓ Tower 中间件：CORS、日志、自定义鉴权
+- ✓ 内存状态 AppState（Arc + RwLock）
+
+下一章：[数据库与持久化](/chapter/database)——把内存状态换成真正的 PostgreSQL，用 SQLx 实现类型安全查询。

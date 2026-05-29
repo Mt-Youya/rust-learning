@@ -1,0 +1,457 @@
+export const frontmatter = {
+  title: "运维基础：容器化与 CI/CD",
+  subtitle: "Docker · GitHub Actions · 自动化部署",
+  chapter: 16,
+  slug: "devops",
+  duration: "5 小时",
+  project: "完整 CI/CD 流水线",
+  status: "available",
+  description: "Docker 多阶段构建极致压缩镜像体积、GitHub Actions 自动化测试与发布、环境变量管理——将你的 Rust 服务安全推向生产。",
+  prev: "project-fullstack",
+  next: "cloud-ops",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Rust 的 DevOps 优势
+
+Rust 编译出的是**单一静态二进制文件**，没有运行时依赖（不像 Node.js 需要 node_modules）。这让容器化极其简单：
+
+```
+Node.js 镜像：基础镜像(100MB) + node(50MB) + node_modules(200MB) = 350MB+
+Rust 镜像：  FROM scratch + 单一二进制 = 10-20MB
+```
+
+---
+
+## Docker：多阶段构建
+
+Rust 编译需要完整工具链（~2GB），但运行只需要二进制。多阶段构建分离编译和运行环境：
+
+```dockerfile
+# Dockerfile（后端）
+# ── 阶段 1：编译 ───────────────────────────────────────────────
+FROM rust:1.78-slim AS builder
+
+WORKDIR /app
+
+# 先复制依赖文件，利用 Docker 缓存
+# 只有 Cargo.toml 变化时才重新下载依赖
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+RUN rm -rf src
+
+# 再复制真正的源码，只重新编译应用代码
+COPY src ./src
+RUN touch src/main.rs && cargo build --release
+
+# ── 阶段 2：运行 ───────────────────────────────────────────────
+# scratch = 空镜像，什么都没有
+FROM debian:bookworm-slim AS runtime
+
+# 仅添加运行时必要的 CA 证书（HTTPS 请求需要）
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# 非 root 用户运行（安全最佳实践）
+RUN useradd -m appuser
+USER appuser
+
+WORKDIR /app
+COPY --from=builder /app/target/release/blog-api .
+
+EXPOSE 3000
+CMD ["./blog-api"]
+```
+
+```dockerfile
+# Dockerfile（前端 Next.js）
+FROM node:22-alpine AS base
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable pnpm && pnpm install --frozen-lockfile
+
+FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN pnpm build  # Next.js standalone 输出
+
+FROM base AS runner
+ENV NODE_ENV=production
+RUN addgroup --system nodejs && adduser --system nextjs
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+USER nextjs
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+<Callout type="tip">
+  Next.js 的 standalone 模式（`output: 'standalone'` in next.config.ts）会把所有依赖打包成可独立运行的目录，配合多阶段构建可以把前端镜像压缩到 ~100MB。
+</Callout>
+
+---
+
+## Docker Compose：本地开发环境
+
+```yaml
+# docker-compose.yml
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     rustforge
+      POSTGRES_PASSWORD: development
+      POSTGRES_DB:       rustforge_db
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    ports: ["3001:3000"]
+    environment:
+      DATABASE_URL: postgres://rustforge:development@postgres:5432/rustforge_db
+      JWT_SECRET:   dev-secret-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:3000"]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_WS_URL:  ws://localhost:3001
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+```
+
+```bash
+# 一键启动完整开发环境
+docker compose up -d
+
+# 查看日志
+docker compose logs -f backend
+
+# 停止
+docker compose down
+```
+
+---
+
+## GitHub Actions：CI/CD 流水线
+
+```yaml
+# .github/workflows/ci.yml
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── 后端 ─────────────────────────────────────────────────────
+  backend-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB:       test_db
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # 缓存编译产物（大幅加速后续 CI）
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Lint
+        working-directory: backend
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://postgres:test@localhost:5432/test_db
+        run: cargo test
+
+  backend-build:
+    needs: backend-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build & push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
+
+  # ── 前端 ─────────────────────────────────────────────────────
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+
+      - name: Type check
+        run: pnpm typecheck
+        working-directory: frontend
+
+      - name: Build
+        run: pnpm build
+        working-directory: frontend
+
+  # ── 部署 ─────────────────────────────────────────────────────
+  deploy:
+    needs: [backend-build, frontend-build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to production
+        run: |
+          # SSH 到服务器或调用 Kubernetes API
+          echo "Deploying version ${{ github.sha }}"
+```
+
+---
+
+## Kubernetes 基础：部署 Rust 服务
+
+```yaml
+# k8s/backend-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blog-api
+spec:
+  replicas: 3  # 3 个副本，负载均衡
+  selector:
+    matchLabels:
+      app: blog-api
+  template:
+    metadata:
+      labels:
+        app: blog-api
+    spec:
+      containers:
+        - name: blog-api
+          image: ghcr.io/your-org/blog-api:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:    # 从 K8s Secret 读取，不硬编码
+                  name: db-secret
+                  key: url
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "64Mi"
+            limits:
+              cpu:    "500m"
+              memory: "128Mi"   # Rust 内存占用极低！
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blog-api-svc
+spec:
+  selector:
+    app: blog-api
+  ports:
+    - port: 80
+      targetPort: 3000
+```
+
+<Callout type="insight">
+  **Rust 在 K8s 的优势**：Node.js 服务通常需要 256-512MB 内存限制，Rust 服务设 64-128MB 绰绰有余。在大规模集群里，这意味着显著更低的云账单。
+</Callout>
+
+---
+
+## 健康检查与优雅关闭
+
+生产环境必备：
+
+```rust
+// src/main.rs — 带健康检查和优雅关闭的服务器
+use axum::{routing::get, Json, Router};
+use serde_json::{json, Value};
+use tokio::signal;
+
+async fn health() -> Json<Value> {
+    Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/health", get(health))
+        // ... 其他路由
+        ;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())  // 优雅关闭
+        .await
+        .unwrap();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    println!("收到关闭信号，等待请求处理完毕...");
+}
+```
+
+---
+
+## 监控与日志
+
+```toml
+# Cargo.toml
+[dependencies]
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+```rust
+use tracing::{info, warn, error, instrument};
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() {
+    // 结构化日志，支持 JSON 输出（Kubernetes 日志收集友好）
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .json()
+        .init();
+
+    info!(version = env!("CARGO_PKG_VERSION"), "服务启动");
+}
+
+// #[instrument] 自动记录函数入参和执行时间
+#[instrument(skip(pool))]
+async fn get_user(pool: &PgPool, id: Uuid) -> Result<User, sqlx::Error> {
+    info!(%id, "查询用户");
+    let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
+        .fetch_one(pool)
+        .await?;
+    info!(%id, "查询成功");
+    Ok(user)
+}
+```
+
+```bash
+# 运行时控制日志级别
+RUST_LOG=blog_api=debug,sqlx=warn cargo run
+```
+
+---
+
+## 实战项目：完整 CI/CD 流水线
+
+<ProjectCard
+  title="完整 CI/CD 流水线"
+  description="为第 6 章的全栈项目配置完整的 CI/CD：单元测试、Docker 构建、自动部署到云服务器。"
+  skills={["Docker 多阶段构建", "GitHub Actions", "K8s Deployment", "健康检查", "结构化日志"]}
+  command="gh repo create rustforge-board --public && git push -u origin main"
+  difficulty="中级"
+  estimatedTime="2 小时"
+/>
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="DevOps：Docker 20MB 镜像 + CI/CD"
+  duration="59 秒精讲"
+  description="Docker 多阶段构建、GitHub Actions、K8s。"
+  src="/videos/ch07-devops.mp4"
+  subtitles="/subtitles/ch07-devops.vtt"
+/>
+
+---
+
+## 本章小结
+
+- ✓ Docker 多阶段构建（20MB Rust 镜像）
+- ✓ Docker Compose 本地开发环境
+- ✓ GitHub Actions CI/CD 流水线
+- ✓ Kubernetes Deployment + Service
+- ✓ 优雅关闭与健康检查
+- ✓ 结构化日志（tracing）
+
+最后一章：[Rust + AI 集成](/chapter/ai)——用 Rust 的性能优势驱动 AI 应用。

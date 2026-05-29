@@ -1,0 +1,158 @@
+export const frontmatter = {
+  title: "错误处理",
+  subtitle: "Result、? 操作符与自定义错误",
+  chapter: 5,
+  slug: "errors",
+  duration: "3 小时",
+  project: "CSV 解析器",
+  status: "available",
+  description: "Result<T,E>、? 操作符、thiserror 自定义错误、anyhow 应用级错误——告别 try-catch 的不确定性。",
+  prev: "structs",
+  next: "generics",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 错误处理哲学
+
+JavaScript 的 `try-catch` 有个根本问题：你不知道一个函数会不会抛出异常，除非读文档或踩坑。
+
+Rust 的规则：**可能失败的操作，必须在类型签名里体现**。
+
+<CompareBlock
+  concept="错误处理"
+  jsLabel="TypeScript（try-catch）"
+  rustLabel="Rust（Result）"
+  js={`// 你不知道这个函数会不会 throw
+async function readFile(path: string): Promise<string> {
+  try {
+    return await fs.readFile(path, 'utf8');
+  } catch (e) {
+    throw new Error(\`读取失败：\${e}\`);
+  }
+}`}
+  rust={`use std::fs;
+
+// 签名直接告诉你：可能成功返回 String，也可能失败返回 io::Error
+fn read_file(path: &str) -> Result<String, std::io::Error> {
+    fs::read_to_string(path)  // ? 会传播错误
+}
+
+// 调用方必须处理两种情况
+match read_file("data.txt") {
+    Ok(content) => println!("{}", content),
+    Err(e)      => eprintln!("错误：{}", e),
+}`}
+  insight="Result 让错误变成了类型的一部分。你不能忽略它，编译器会提醒你——这就是 Rust 错误处理的核心价值。"
+/>
+
+---
+
+## ? 操作符：优雅的错误传播
+
+`?` 类似 `await`——它简化了错误传播的样板代码：
+
+```rust
+use std::io;
+use std::fs;
+
+fn read_username() -> Result<String, io::Error> {
+    // ? 的意思：成功就继续，失败就立刻返回 Err
+    let content = fs::read_to_string("username.txt")?;
+    Ok(content.trim().to_string())
+}
+
+// 链式 ? 操作
+fn parse_config() -> Result<Config, io::Error> {
+    let json = fs::read_to_string("config.json")?;
+    let config: Config = serde_json::from_str(&json)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    Ok(config)
+}
+```
+
+---
+
+## 自定义错误：thiserror
+
+```toml
+[dependencies]
+thiserror = "1"
+anyhow = "1"
+```
+
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+enum AppError {
+    #[error("IO 错误：{0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("解析错误（第 {line} 行）：{msg}")]
+    Parse { line: usize, msg: String },
+
+    #[error("用户 {0} 不存在")]
+    NotFound(String),
+}
+
+// ? 自动把 io::Error 转为 AppError::Io
+fn process_file(path: &str) -> Result<Vec<Record>, AppError> {
+    let content = std::fs::read_to_string(path)?;  // io::Error → AppError::Io
+    parse_records(&content)
+}
+```
+
+<Callout type="tip">
+  **库代码用 thiserror**：定义精确的错误类型，让调用方可以 `match` 不同情况。<br />
+  **应用代码用 anyhow**：快速传播错误，加上有用的上下文信息。
+</Callout>
+
+---
+
+## anyhow：应用级错误处理
+
+```rust
+use anyhow::{Context, Result};
+
+fn load_app() -> Result<App> {
+    let config = fs::read_to_string("config.json")
+        .context("找不到配置文件 config.json")?;
+
+    let settings: Settings = serde_json::from_str(&config)
+        .context("配置文件格式错误")?;
+
+    App::init(settings).context("应用初始化失败")
+}
+```
+
+---
+
+## 实战项目：CSV 解析器
+
+<ProjectCard
+  title="CSV 文件解析器"
+  description="读取 CSV 文件，解析每行数据，处理格式错误、类型错误、文件不存在等所有可能的错误情况，输出清晰的错误报告。"
+  skills={["thiserror 自定义错误", "? 错误传播", "anyhow::Context", "错误信息友好化"]}
+  command="cargo new csv-parser && cd csv-parser"
+  difficulty="中级"
+  estimatedTime="60 分钟"
+/>
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="Rust 错误处理：Result 与 ?"
+  duration="20 分钟精讲"
+  description="Result 类型、? 操作符、thiserror 和 anyhow 的使用场景对比。"
+  src="/videos/ch05-errors.mp4"
+  subtitles="/subtitles/ch05-errors.vtt"
+/>

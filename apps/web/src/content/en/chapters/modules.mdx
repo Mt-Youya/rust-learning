@@ -1,0 +1,191 @@
+export const frontmatter = {
+  title: "Module System & Cargo Ecosystem",
+  subtitle: "Code Organization · Package Management · Workspace",
+  chapter: 9,
+  slug: "modules",
+  duration: "2 hours",
+  project: "Publish a Crates.io Library",
+  status: "available",
+  description: "Organize code with mod, control visibility with pub, import paths with use, manage monorepos with Cargo workspace, and publish to Crates.io — manage Rust projects just like npm packages.",
+  prev: "concurrency",
+  next: "testing",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Cargo Project Structure
+
+<CompareBlock
+  jsTitle="Node.js Project Structure"
+  rustTitle="Rust Cargo Project Structure"
+  js={`my-project/
+├── package.json     # dependency declaration
+├── node_modules/    # dependencies directory
+├── src/
+│   ├── index.js
+│   └── utils.js
+└── .gitignore`}
+  rust={`my-project/
+├── Cargo.toml       # dependency declaration (= package.json)
+├── Cargo.lock       # lock file (= package-lock.json)
+├── src/
+│   ├── main.rs      # binary entry point
+│   ├── lib.rs       # library entry point (optional)
+│   └── utils.rs     # module file
+└── .gitignore`}
+/>
+
+## Module System
+
+```rust
+// src/lib.rs
+mod garden;          // declare module, maps to src/garden.rs
+mod kitchen {        // inline module
+    pub fn cook() { println!("cooking!"); }
+}
+
+pub use garden::Vegetable; // re-export to simplify external paths
+```
+
+```rust
+// src/garden.rs
+pub struct Vegetable {
+    pub name: String,
+    calories: u32, // private field
+}
+
+impl Vegetable {
+    pub fn new(name: &str) -> Vegetable {
+        Vegetable { name: name.to_string(), calories: 0 }
+    }
+}
+
+pub mod seasonal; // nested submodule, maps to src/garden/seasonal.rs
+```
+
+<Callout type="insight">
+Rust visibility is **private** by default; `pub` explicitly makes things public. This is the opposite of JS (where exporting requires `export`), but it's safer: API boundaries are crystal clear, and internal implementation details are never accidentally exposed.
+</Callout>
+
+## use: Path Simplification
+
+```rust
+use std::collections::HashMap;
+use std::io::{self, Write};  // bring both io and io::Write into scope
+use crate::garden::Vegetable; // crate:: refers to the current crate root
+
+// rename with as
+use std::fmt::Result as FmtResult;
+use std::io::Result as IoResult;
+```
+
+## Cargo.toml: Dependency Management
+
+```toml
+[package]
+name = "my-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = "0.11"
+
+[dev-dependencies]   # test-only dependencies
+criterion = "0.5"
+
+[features]           # optional features
+default = []
+postgres = ["sqlx/postgres"]
+```
+
+<Callout type="tip">
+The `features` system is a core design of the Rust ecosystem — crates only compile the necessary code by default, and users opt into features as needed. This keeps binaries smaller and builds faster. Think of it as tree-shaking, but at compile time.
+</Callout>
+
+## Cargo Workspace: Monorepo
+
+```toml
+# workspace/Cargo.toml (root)
+[workspace]
+members = [
+    "crates/core",
+    "crates/web",
+    "crates/cli",
+]
+resolver = "2"
+```
+
+```
+workspace/
+├── Cargo.toml          # workspace root
+├── Cargo.lock          # shared lock file
+└── crates/
+    ├── core/           # shared logic library
+    │   ├── Cargo.toml
+    │   └── src/lib.rs
+    ├── web/            # Axum web service
+    │   ├── Cargo.toml  # depends on core
+    │   └── src/main.rs
+    └── cli/            # CLI tool
+        ├── Cargo.toml  # depends on core
+        └── src/main.rs
+```
+
+```toml
+# crates/web/Cargo.toml
+[dependencies]
+core = { path = "../core" }  # local dependency
+```
+
+## Publishing to Crates.io
+
+```bash
+# log in (requires a crates.io account)
+cargo login <token>
+
+# pre-publish checks
+cargo check
+cargo test
+cargo doc --open   # preview documentation
+
+# publish
+cargo publish
+```
+
+```rust
+// doc comments automatically generate docs.rs pages
+/// Converts Celsius to Fahrenheit.
+///
+/// # Examples
+/// ```
+/// use my_crate::celsius_to_fahrenheit;
+/// assert_eq!(celsius_to_fahrenheit(0.0), 32.0);
+/// ```
+pub fn celsius_to_fahrenheit(c: f64) -> f64 {
+    c * 9.0 / 5.0 + 32.0
+}
+```
+
+<Callout type="note">
+The `# Examples` code blocks inside `///` doc comments are automatically run by `cargo test` — documentation is also tested, so docs are always up to date.
+</Callout>
+
+<VideoPlaceholder
+  title="Cargo Workspace in Practice"
+  description="Evolving from a single-crate project to a workspace monorepo: splitting into core/web/cli crates, sharing type definitions, and managing unified dependency versions"
+/>
+
+<ProjectCard
+  title="Publish a Crates.io Library"
+  description="Build a byte-formatting utility library (bytes-fmt): provide human-readable byte size display (1.5 KB, 2.3 MB), add complete doc comments, unit tests, and example code, then publish to Crates.io."
+  skills={["Module System", "Cargo.toml", "Doc Comments", "cargo publish"]}
+  startCommand="cargo new bytes-fmt --lib && cd bytes-fmt"
+/>

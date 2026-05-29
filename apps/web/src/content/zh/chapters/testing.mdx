@@ -1,0 +1,169 @@
+export const frontmatter = {
+  title: "测试与代码质量",
+  subtitle: "单元测试 · 集成测试 · 性能基准",
+  chapter: 10,
+  slug: "testing",
+  duration: "3 小时",
+  project: "为 Axum API 构建完整测试套件",
+  status: "available",
+  description: "Rust 内置测试框架、异步测试、属性测试（proptest）、criterion 基准测试、cargo clippy/fmt——代码质量的完整工具链。",
+  prev: "modules",
+  next: "cli",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Rust 内置测试：无需额外框架
+
+<CompareBlock
+  concept="单元测试"
+  jsLabel="TypeScript（Jest）"
+  rustLabel="Rust（内置）"
+  js={`// package.json: "jest": "^29.0.0"
+import { add } from './math';
+
+describe('add', () => {
+  it('两正数相加', () => {
+    expect(add(2, 3)).toBe(5);
+  });
+  
+  it('负数', () => {
+    expect(add(-1, -2)).toBe(-3);
+  });
+});`}
+  rust={`// 直接在源文件里写，不需要任何包
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]  // 只在测试时编译
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 两正数相加() {
+        assert_eq!(add(2, 3), 5);
+    }
+
+    #[test]
+    fn 负数() {
+        assert_eq!(add(-1, -2), -3);
+    }
+}`}
+  insight="Rust 测试是语言的一部分，不是第三方库。cargo test 自动发现和运行所有 #[test] 函数，包括文档里的代码示例。"
+/>
+
+---
+
+## 异步测试
+
+```rust
+#[tokio::test]
+async fn test_api_endpoint() {
+    let app = create_test_app().await;
+    
+    let response = app
+        .oneshot(Request::builder()
+            .uri("/api/posts")
+            .body(Body::empty())
+            .unwrap())
+        .await
+        .unwrap();
+    
+    assert_eq!(response.status(), StatusCode::OK);
+}
+```
+
+---
+
+## SQLx 测试：自动回滚
+
+```rust
+#[sqlx::test]
+async fn test_create_user(pool: PgPool) {
+    // pool 是测试专用连接，测试结束后自动回滚
+    let user = create_user(&pool, "test@example.com", "testuser", "hash")
+        .await
+        .unwrap();
+    
+    assert_eq!(user.email, "test@example.com");
+    assert!(user.id.to_string().len() > 0);
+}
+// 无论测试成功还是失败，数据库状态自动恢复
+```
+
+---
+
+## 文档测试：让示例永远正确
+
+```rust
+/// 计算两数之和。
+///
+/// # 示例
+///
+/// ```
+/// let result = my_crate::add(2, 3);
+/// assert_eq!(result, 5);
+/// ```
+pub fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+```
+
+`cargo test` 会运行文档里的代码块，保证示例永远是最新且正确的。
+
+---
+
+## 开发工具链
+
+```bash
+# 代码质量检查（比编译器更严格）
+cargo clippy -- -D warnings   # 警告当错误
+
+# 统一代码格式
+cargo fmt
+cargo fmt --check             # 只检查，用于 CI
+
+# 生成并查看文档
+cargo doc --open
+
+# 安全漏洞扫描
+cargo audit
+
+# 文件变化时自动运行
+cargo watch -x test
+cargo watch -x 'clippy -- -D warnings'
+```
+
+<Callout type="tip">
+  在 CI 里运行：`cargo fmt --check && cargo clippy -- -D warnings && cargo test`，三行命令保证代码质量。
+</Callout>
+
+---
+
+## 实战项目：完整测试套件
+
+<ProjectCard
+  title="为博客 API 添加完整测试套件"
+  description="为第 9-10 章的博客 API 添加：单元测试（认证逻辑）、集成测试（API 端点）、SQLx 数据库测试（CRUD 操作），配置 GitHub Actions CI。"
+  skills={["#[tokio::test] 异步测试", "#[sqlx::test] 数据库测试", "Axum 测试客户端 oneshot", "CI 配置"]}
+  command="cd blog-api && cargo test"
+  difficulty="中级"
+  estimatedTime="90 分钟"
+/>
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="Rust 测试体系与工具链"
+  duration="20 分钟精讲"
+  description="单元测试、异步测试、SQLx 自动回滚、文档测试、clippy 和 fmt 的 CI 集成。"
+  src="/videos/ch12-testing.mp4"
+  subtitles="/subtitles/ch12-testing.vtt"
+/>

@@ -1,0 +1,457 @@
+export const frontmatter = {
+  title: "DevOps Basics: Containerization & CI/CD",
+  subtitle: "Docker · GitHub Actions · Automated Deployment",
+  chapter: 16,
+  slug: "devops",
+  duration: "5 hours",
+  project: "Full CI/CD Pipeline",
+  status: "available",
+  description: "Docker multi-stage builds for ultra-slim images, GitHub Actions for automated testing and releases, environment variable management — ship your Rust service to production safely.",
+  prev: "project-fullstack",
+  next: "cloud-ops",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Rust's DevOps Advantages
+
+Rust compiles to a **single static binary** with no runtime dependencies (unlike Node.js, which requires node_modules). This makes containerization extremely simple:
+
+```
+Node.js image: base image (100MB) + node (50MB) + node_modules (200MB) = 350MB+
+Rust image:   FROM scratch + single binary = 10-20MB
+```
+
+---
+
+## Docker: Multi-Stage Builds
+
+Rust compilation requires the full toolchain (~2GB), but running only needs the binary. Multi-stage builds separate the build and runtime environments:
+
+```dockerfile
+# Dockerfile (backend)
+# ── Stage 1: Build ────────────────────────────────────────────────
+FROM rust:1.78-slim AS builder
+
+WORKDIR /app
+
+# Copy dependency files first to leverage Docker cache
+# Only re-download dependencies when Cargo.toml changes
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release
+RUN rm -rf src
+
+# Then copy the real source code, only recompile application code
+COPY src ./src
+RUN touch src/main.rs && cargo build --release
+
+# ── Stage 2: Run ─────────────────────────────────────────────────
+# scratch = empty image, nothing at all
+FROM debian:bookworm-slim AS runtime
+
+# Only add CA certificates needed at runtime (required for HTTPS requests)
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Run as non-root user (security best practice)
+RUN useradd -m appuser
+USER appuser
+
+WORKDIR /app
+COPY --from=builder /app/target/release/blog-api .
+
+EXPOSE 3000
+CMD ["./blog-api"]
+```
+
+```dockerfile
+# Dockerfile (frontend Next.js)
+FROM node:22-alpine AS base
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-lock.yaml ./
+RUN corepack enable pnpm && pnpm install --frozen-lockfile
+
+FROM base AS builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN pnpm build  # Next.js standalone output
+
+FROM base AS runner
+ENV NODE_ENV=production
+RUN addgroup --system nodejs && adduser --system nextjs
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+USER nextjs
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+<Callout type="tip">
+  Next.js standalone mode (`output: 'standalone'` in next.config.ts) bundles all dependencies into a self-contained directory. Combined with multi-stage builds, this can shrink the frontend image down to ~100MB.
+</Callout>
+
+---
+
+## Docker Compose: Local Development Environment
+
+```yaml
+# docker-compose.yml
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     rustforge
+      POSTGRES_PASSWORD: development
+      POSTGRES_DB:       rustforge_db
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    ports: ["3001:3000"]
+    environment:
+      DATABASE_URL: postgres://rustforge:development@postgres:5432/rustforge_db
+      JWT_SECRET:   dev-secret-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:3000"]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      NEXT_PUBLIC_WS_URL:  ws://localhost:3001
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+```
+
+```bash
+# Start the full development environment with one command
+docker compose up -d
+
+# View logs
+docker compose logs -f backend
+
+# Stop
+docker compose down
+```
+
+---
+
+## GitHub Actions: CI/CD Pipeline
+
+```yaml
+# .github/workflows/ci.yml
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Backend ───────────────────────────────────────────────────
+  backend-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB:       test_db
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # Cache build artifacts (significantly speeds up subsequent CI runs)
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Lint
+        working-directory: backend
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://postgres:test@localhost:5432/test_db
+        run: cargo test
+
+  backend-build:
+    needs: backend-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build & push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
+
+  # ── Frontend ──────────────────────────────────────────────────
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: frontend
+
+      - name: Type check
+        run: pnpm typecheck
+        working-directory: frontend
+
+      - name: Build
+        run: pnpm build
+        working-directory: frontend
+
+  # ── Deploy ────────────────────────────────────────────────────
+  deploy:
+    needs: [backend-build, frontend-build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to production
+        run: |
+          # SSH to server or call Kubernetes API
+          echo "Deploying version ${{ github.sha }}"
+```
+
+---
+
+## Kubernetes Basics: Deploying a Rust Service
+
+```yaml
+# k8s/backend-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blog-api
+spec:
+  replicas: 3  # 3 replicas for load balancing
+  selector:
+    matchLabels:
+      app: blog-api
+  template:
+    metadata:
+      labels:
+        app: blog-api
+    spec:
+      containers:
+        - name: blog-api
+          image: ghcr.io/your-org/blog-api:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:    # read from K8s Secret, no hardcoding
+                  name: db-secret
+                  key: url
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "64Mi"
+            limits:
+              cpu:    "500m"
+              memory: "128Mi"   # Rust memory usage is extremely low!
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blog-api-svc
+spec:
+  selector:
+    app: blog-api
+  ports:
+    - port: 80
+      targetPort: 3000
+```
+
+<Callout type="insight">
+  **Rust's advantage in K8s**: Node.js services typically need 256-512MB memory limits, while Rust services run comfortably within 64-128MB. At scale, this translates to significantly lower cloud bills.
+</Callout>
+
+---
+
+## Health Checks & Graceful Shutdown
+
+Essential for production:
+
+```rust
+// src/main.rs — server with health check and graceful shutdown
+use axum::{routing::get, Json, Router};
+use serde_json::{json, Value};
+use tokio::signal;
+
+async fn health() -> Json<Value> {
+    Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/health", get(health))
+        // ... other routes
+        ;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())  // graceful shutdown
+        .await
+        .unwrap();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    println!("Shutdown signal received, waiting for in-flight requests to complete...");
+}
+```
+
+---
+
+## Monitoring & Logging
+
+```toml
+# Cargo.toml
+[dependencies]
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+```rust
+use tracing::{info, warn, error, instrument};
+use tracing_subscriber::EnvFilter;
+
+#[tokio::main]
+async fn main() {
+    // Structured logging with JSON output support (Kubernetes log collection friendly)
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .json()
+        .init();
+
+    info!(version = env!("CARGO_PKG_VERSION"), "service started");
+}
+
+// #[instrument] automatically records function arguments and execution time
+#[instrument(skip(pool))]
+async fn get_user(pool: &PgPool, id: Uuid) -> Result<User, sqlx::Error> {
+    info!(%id, "fetching user");
+    let user = sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
+        .fetch_one(pool)
+        .await?;
+    info!(%id, "fetch successful");
+    Ok(user)
+}
+```
+
+```bash
+# Control log level at runtime
+RUST_LOG=blog_api=debug,sqlx=warn cargo run
+```
+
+---
+
+## Hands-On Project: Full CI/CD Pipeline
+
+<ProjectCard
+  title="Full CI/CD Pipeline"
+  description="Set up a complete CI/CD pipeline for the full-stack project from Chapter 6: unit tests, Docker builds, and automated deployment to a cloud server."
+  skills={["Docker multi-stage builds", "GitHub Actions", "K8s Deployment", "Health checks", "Structured logging"]}
+  command="gh repo create rustforge-board --public && git push -u origin main"
+  difficulty="Intermediate"
+  estimatedTime="2 hours"
+/>
+
+---
+
+## Video Walkthrough
+
+<VideoPlaceholder
+  title="DevOps: Docker 20MB Image + CI/CD"
+  duration="59-second overview"
+  description="Docker multi-stage builds, GitHub Actions, K8s."
+  src="/videos/ch07-devops.mp4"
+  subtitles="/subtitles/ch07-devops.vtt"
+/>
+
+---
+
+## Chapter Summary
+
+- ✓ Docker multi-stage builds (20MB Rust image)
+- ✓ Docker Compose local development environment
+- ✓ GitHub Actions CI/CD pipeline
+- ✓ Kubernetes Deployment + Service
+- ✓ Graceful shutdown and health checks
+- ✓ Structured logging (tracing)
+
+Final chapter: [Rust + AI Integration](/chapter/ai) — leverage Rust's performance advantages to power AI applications.

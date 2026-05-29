@@ -1,0 +1,369 @@
+export const frontmatter = {
+  title: "Database & Persistence",
+  subtitle: "SQLx + PostgreSQL Type-Safe Queries",
+  chapter: 13,
+  slug: "database",
+  duration: "4 hours",
+  project: "Data Access Layer in Practice",
+  status: "available",
+  description: "Type-safe database queries, migration management, connection pooling — ditch ORM magic and take real control of your data.",
+  prev: "web-backend",
+  next: "auth",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Why SQLx Instead of an ORM?
+
+The frontend world is used to ORMs like Prisma and TypeORM — convenient, but a black box.
+**SQLx** is the most popular database library in Rust, with one standout feature: **SQL validation at compile time**.
+
+```
+SQL syntax error in your query? → Compile fails
+Query result type doesn't match your Rust struct? → Compile fails
+Referencing a column that doesn't exist? → Compile fails
+```
+
+No runtime surprises. No type-casting magic.
+
+```toml
+# Cargo.toml
+[dependencies]
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "uuid", "time", "migrate"] }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+```
+
+---
+
+## Connection & Connection Pool
+
+<CompareBlock
+  concept="Database Connection"
+  jsLabel="Node.js (pg / Prisma)"
+  rustLabel="SQLx (PgPool)"
+  js={`// Node.js: connection pool is usually hidden inside the ORM
+import { PrismaClient } from '@prisma/client';
+const prisma = new PrismaClient();
+
+// or using pg directly
+import { Pool } from 'pg';
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });`}
+  rust={`use sqlx::PgPool;
+
+#[tokio::main]
+async fn main() {
+    // read connection string from environment variable
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL not set");
+
+    // create connection pool (up to 10 connections)
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("failed to connect to database");
+
+    // pool can be cloned (internally an Arc), pass it around freely
+    println!("database connected successfully");
+}`}
+  insight="SQLx's connection pool is wrapped in an Arc, so it can be safely cloned and passed to multiple handlers. `PgPool::connect` automatically configures the pool size from URL parameters; use `PgPoolOptions` for fine-grained control."
+/>
+
+---
+
+## Database Migrations
+
+SQLx has built-in migration management, similar to Prisma Migrate but more transparent:
+
+```bash
+# install SQLx CLI
+cargo install sqlx-cli
+
+# create migration files
+sqlx migrate add create_users_table
+sqlx migrate add create_posts_table
+
+# run migrations
+sqlx migrate run
+
+# roll back
+sqlx migrate revert
+```
+
+```sql
+-- migrations/20240101_create_users_table.sql
+CREATE TABLE users (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    email      TEXT        NOT NULL UNIQUE,
+    username   TEXT        NOT NULL UNIQUE,
+    password_hash TEXT     NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- migrations/20240102_create_posts_table.sql
+CREATE TABLE posts (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    author_id  UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title      TEXT        NOT NULL,
+    content    TEXT        NOT NULL DEFAULT '',
+    published  BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX posts_author_idx ON posts(author_id);
+CREATE INDEX posts_published_idx ON posts(published);
+```
+
+<Callout type="tip">
+  Use the `sqlx::migrate!()` macro in your code to automatically run all pending migrations at application startup — perfect for CI/CD pipelines.
+</Callout>
+
+---
+
+## Queries: Compile-Time Validation with the query! Macro
+
+```rust
+use sqlx::PgPool;
+use uuid::Uuid;
+use time::OffsetDateTime;
+
+#[derive(Debug, sqlx::FromRow)]
+struct User {
+    id:            Uuid,
+    email:         String,
+    username:      String,
+    created_at:    OffsetDateTime,
+}
+
+// the query! macro connects to the database at compile time to validate SQL
+// requires DATABASE_URL environment variable (use .env in development)
+async fn find_user_by_email(pool: &PgPool, email: &str) -> sqlx::Result<Option<User>> {
+    let user = sqlx::query_as!(
+        User,
+        r#"
+        SELECT id, email, username, created_at
+        FROM users
+        WHERE email = $1
+        "#,
+        email
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(user)
+}
+
+// insert data
+async fn create_user(
+    pool: &PgPool,
+    email: &str,
+    username: &str,
+    password_hash: &str,
+) -> sqlx::Result<User> {
+    let user = sqlx::query_as!(
+        User,
+        r#"
+        INSERT INTO users (email, username, password_hash)
+        VALUES ($1, $2, $3)
+        RETURNING id, email, username, created_at
+        "#,
+        email, username, password_hash
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(user)
+}
+```
+
+### Choosing a fetch Method
+
+| Method | Use Case | Row Count |
+|--------|----------|-----------|
+| `fetch_one` | Expects exactly one result | 0 rows → Error |
+| `fetch_optional` | Result may not exist | Returns `Option<T>` |
+| `fetch_all` | Returns all results | Returns `Vec<T>` |
+| `fetch` | Stream large result sets | Returns `Stream<T>` |
+| `execute` | INSERT/UPDATE/DELETE | Returns rows affected |
+
+---
+
+## Transaction Handling
+
+```rust
+async fn transfer_credits(
+    pool: &PgPool,
+    from_id: Uuid,
+    to_id:   Uuid,
+    amount:  i64,
+) -> sqlx::Result<()> {
+    // begin transaction
+    let mut tx = pool.begin().await?;
+
+    // deduct balance from sender
+    sqlx::query!(
+        "UPDATE accounts SET balance = balance - $1 WHERE id = $2",
+        amount, from_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // add balance to receiver
+    sqlx::query!(
+        "UPDATE accounts SET balance = balance + $1 WHERE id = $2",
+        amount, to_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // commit transaction (if an error occurs midway, dropping tx auto-rolls back)
+    tx.commit().await?;
+    Ok(())
+}
+```
+
+---
+
+## Integration with Axum
+
+Pass `PgPool` as AppState and each handler accesses it via the `State` extractor:
+
+```rust
+use axum::{extract::{Path, State}, routing::get, Json, Router};
+use sqlx::PgPool;
+
+#[derive(Clone)]
+struct AppState { db: PgPool }
+
+#[tokio::main]
+async fn main() {
+    // automatically read .env file (development environment)
+    dotenvy::dotenv().ok();
+    let database_url = std::env::var("DATABASE_URL").unwrap();
+
+    let pool = PgPool::connect(&database_url).await.unwrap();
+
+    // automatically run migrations on startup
+    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+    let state = AppState { db: pool };
+
+    let app = Router::new()
+        .route("/users/:id", get(get_user))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn get_user(
+    State(state): State<AppState>,
+    Path(id):     Path<Uuid>,
+) -> Result<Json<User>, StatusCode> {
+    sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+```
+
+---
+
+## Hands-On Project: User Authentication System
+
+<ProjectCard
+  title="User Authentication System"
+  description="Implement a complete registration/login/verification flow: bcrypt password hashing, JWT generation and validation, protected routes."
+  skills={["SQLx queries", "bcrypt password hashing", "JWT (jsonwebtoken)", "transactions", "Axum middleware"]}
+  command="cargo new auth-service && cd auth-service"
+  difficulty="Intermediate"
+  estimatedTime="90 minutes"
+/>
+
+```toml
+# Cargo.toml key dependencies
+[dependencies]
+sqlx       = { version = "0.8", features = ["postgres", "runtime-tokio", "uuid", "time"] }
+bcrypt     = "0.15"
+jsonwebtoken = "9"
+axum       = "0.8"
+tokio      = { version = "1", features = ["full"] }
+serde      = { version = "1", features = ["derive"] }
+dotenvy    = "0.15"
+```
+
+```rust
+// src/auth.rs — core authentication logic
+
+use bcrypt::{hash, verify, DEFAULT_COST};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+const JWT_SECRET: &[u8] = b"your-secret-key-change-in-production";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,   // subject = user id
+    exp: usize,    // expiration time (Unix timestamp)
+}
+
+pub fn hash_password(password: &str) -> bcrypt::BcryptResult<String> {
+    hash(password, DEFAULT_COST)
+}
+
+pub fn verify_password(password: &str, hash: &str) -> bool {
+    verify(password, hash).unwrap_or(false)
+}
+
+pub fn generate_jwt(user_id: Uuid) -> String {
+    let expiration = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::days(7))
+        .unwrap()
+        .timestamp() as usize;
+
+    let claims = Claims { sub: user_id.to_string(), exp: expiration };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(JWT_SECRET)).unwrap()
+}
+
+pub fn verify_jwt(token: &str) -> Result<Uuid, ()> {
+    decode::<Claims>(token, &DecodingKey::from_secret(JWT_SECRET), &Validation::default())
+        .map_err(|_| ())?
+        .claims
+        .sub
+        .parse::<Uuid>()
+        .map_err(|_| ())
+}
+```
+
+---
+
+## Video Walkthrough
+
+<VideoPlaceholder
+  title="SQLx Database: Compile-Time SQL Validation"
+  duration="1 min 5 sec deep dive"
+  description="SQLx query! macro, connection pool, migrations, transactions."
+  src="/videos/ch05-database.mp4"
+  subtitles="/subtitles/ch05-database.vtt"
+/>
+
+---
+
+## Chapter Summary
+
+- ✓ SQLx connection pool and environment variable configuration
+- ✓ Database migration management (sqlx-cli)
+- ✓ `query!` / `query_as!` compile-time SQL validation
+- ✓ Transaction handling and error rollback
+- ✓ Integration with Axum AppState
+- ✓ bcrypt password hashing + JWT authentication
+
+Next chapter: [Full-Stack Project in Practice](/chapter/fullstack) — combine a Next.js frontend with a Rust backend into a complete application.

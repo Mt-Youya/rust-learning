@@ -1,0 +1,230 @@
+export const frontmatter = {
+  title: "认证与安全",
+  subtitle: "JWT · OAuth2 · RBAC · 安全中间件",
+  chapter: 14,
+  slug: "auth",
+  duration: "3 小时",
+  project: "完整用户认证服务",
+  status: "available",
+  description: "JWT 令牌签发与验证、OAuth2 第三方登录、基于角色的权限控制（RBAC）、密码哈希、速率限制——用 Rust 类型系统把安全漏洞消灭在编译期。",
+  prev: "database",
+  next: "project-fullstack",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 密码安全：bcrypt / Argon2
+
+永远不要存储明文密码。Rust 生态提供了经过安全审计的哈希库：
+
+```toml
+[dependencies]
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["std"] }
+```
+
+```rust
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
+
+pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    Ok(argon2.hash_password(password.as_bytes(), &salt)?.to_string())
+}
+
+pub fn verify_password(password: &str, hash: &str) -> bool {
+    let parsed_hash = PasswordHash::new(hash).unwrap();
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok()
+}
+```
+
+<Callout type="warning">
+使用 `Argon2id`（默认）而非 `bcrypt`——Argon2id 是 2015 年密码哈希大赛冠军，对 GPU 暴力破解有更强抵抗力。永远用库函数，绝不自己实现哈希。
+</Callout>
+
+## JWT 认证
+
+```toml
+[dependencies]
+jsonwebtoken = "9"
+serde = { version = "1", features = ["derive"] }
+```
+
+```rust
+use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,     // subject（用户 ID）
+    pub role: String,    // 用户角色
+    pub exp: usize,      // 过期时间（Unix timestamp）
+}
+
+pub fn create_token(user_id: &str, role: &str, secret: &[u8]) -> String {
+    let expiration = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::hours(24))
+        .unwrap()
+        .timestamp() as usize;
+
+    let claims = Claims {
+        sub: user_id.to_owned(),
+        role: role.to_owned(),
+        exp: expiration,
+    };
+
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).unwrap()
+}
+
+pub fn verify_token(token: &str, secret: &[u8]) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret),
+        &Validation::default(),
+    )?;
+    Ok(token_data.claims)
+}
+```
+
+## Axum JWT 中间件
+
+```rust
+use axum::{
+    extract::{Request, State},
+    http::StatusCode,
+    middleware::Next,
+    response::Response,
+};
+
+pub async fn auth_middleware(
+    State(secret): State<Vec<u8>>,
+    mut req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    let claims = verify_token(token, &secret)
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+    // 将 claims 注入请求扩展，下游 handler 可提取
+    req.extensions_mut().insert(claims);
+    Ok(next.run(req).await)
+}
+```
+
+<CompareBlock
+  jsTitle="Express.js JWT 中间件"
+  rustTitle="Axum JWT 中间件"
+  js={`app.use((req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});`}
+  rust={`// Axum 类型系统保证：未通过 auth_middleware 的路由
+// 无法通过 Extension<Claims> 提取器获取用户信息
+// 编译期就阻止了"忘记加认证中间件"的错误
+
+async fn protected_handler(
+    Extension(claims): Extension<Claims>,
+) -> String {
+    format!("Hello, {}!", claims.sub)
+}`}
+/>
+
+## RBAC：基于角色的权限控制
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Role {
+    Admin,
+    User,
+    Guest,
+}
+
+impl Role {
+    pub fn can(&self, action: &str) -> bool {
+        match (self, action) {
+            (Role::Admin, _) => true,
+            (Role::User, "read" | "write") => true,
+            (Role::Guest, "read") => true,
+            _ => false,
+        }
+    }
+}
+
+// 角色提取器中间件
+pub async fn require_role(
+    Extension(claims): Extension<Claims>,
+    State(required_role): State<Role>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let user_role: Role = claims.role.parse().map_err(|_| StatusCode::FORBIDDEN)?;
+    if user_role == required_role || user_role == Role::Admin {
+        Ok(next.run(req).await)
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+```
+
+## 速率限制
+
+```toml
+[dependencies]
+tower-governor = "0.4"
+```
+
+```rust
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
+
+let governor_conf = Box::new(
+    GovernorConfigBuilder::default()
+        .per_second(2)    // 每秒最多 2 个请求
+        .burst_size(5)    // 允许突发 5 个
+        .finish()
+        .unwrap(),
+);
+
+let app = Router::new()
+    .route("/login", post(login_handler))
+    .layer(GovernorLayer { config: governor_conf });
+```
+
+<Callout type="tip">
+速率限制应该在认证路由（`/login`, `/register`）上单独配置，比全局限制更严格——防止暴力破解，同时不影响普通 API 路由的性能。
+</Callout>
+
+<VideoPlaceholder
+  title="JWT 认证系统实战演示"
+  description="从注册、登录到受保护路由：密码 Argon2 哈希、JWT 签发、中间件验证、RBAC 权限控制完整实现"
+/>
+
+<ProjectCard
+  title="完整用户认证服务"
+  description="构建包含注册（密码 Argon2 哈希）、登录（JWT 签发）、令牌刷新、受保护路由（中间件验证）、基于角色权限控制（Admin/User/Guest）的完整认证微服务。"
+  skills={["Argon2", "JWT", "Axum 中间件", "RBAC", "速率限制", "SQLx"]}
+  startCommand="cargo new auth-service && cd auth-service"
+/>

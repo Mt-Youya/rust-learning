@@ -1,0 +1,322 @@
+export const frontmatter = {
+  title: "所有权与借用",
+  subtitle: "Rust 最核心的内存管理机制",
+  chapter: 3,
+  slug: "ownership",
+  duration: "4 小时",
+  project: "字符串处理器",
+  status: "available",
+  description: "Move 语义、借用规则、生命周期——理解 Rust 如何在没有 GC 的情况下保证内存安全。",
+  prev: "variables",
+  next: "structs",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+import { OwnershipDiagram } from "@/components/animations/OwnershipDiagram";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 为什么需要所有权？
+
+JavaScript 靠垃圾回收器（GC）管理内存。GC 很方便，但它有隐藏成本：
+
+- **停顿**：GC 运行时程序暂停（即使只是几毫秒）
+- **不确定性**：你不知道内存何时释放
+- **开销**：GC 需要额外内存追踪对象引用
+
+C/C++ 手动管理内存——极致性能，但容易：悬空指针、双重释放、内存泄漏。
+
+Rust 的答案：**编译期所有权系统**。内存管理的决策在编译时完成，运行时零开销，零 GC，零不安全。
+
+---
+
+## 三条所有权规则
+
+这三条规则是 Rust 整个内存系统的基础，所有复杂行为都从这里推导：
+
+```
+1. 每个值有且只有一个"所有者"（变量）
+2. 同一时刻，只能有一个所有者
+3. 所有者离开作用域时，值被立即释放（drop）
+```
+
+<Callout type="insight">
+  规则 3 是关键。Rust 不需要 GC 的原因：**作用域结束 = 内存释放**，编译器自动插入 `drop()` 调用，比 GC 更精确，比手动 `free()` 更安全。
+</Callout>
+
+---
+
+## 交互演示：看见所有权转移
+
+下面的动画展示四个核心步骤——点击逐步探索：
+
+<OwnershipDiagram />
+
+---
+
+## Move：所有权转移
+
+<CompareBlock
+  concept="赋值语义"
+  jsLabel="JavaScript（引用语义）"
+  rustLabel="Rust（移动语义）"
+  js={`// JS：赋值复制引用，两者指向同一对象
+let s1 = { value: "hello" };
+let s2 = s1;          // s1 和 s2 都有效
+
+console.log(s1.value); // "hello" ✓
+console.log(s2.value); // "hello" ✓
+
+// 修改 s2 也会影响 s1（共享引用）
+s2.value = "world";
+console.log(s1.value); // "world" — 被改了！`}
+  rust={`// Rust：赋值转移所有权，s1 失效
+let s1 = String::from("hello");
+let s2 = s1;          // s1 的所有权移动给 s2
+
+// println!("{s1}"); // ✗ 编译错误：s1 已移动
+println!("{s2}");    // ✓
+
+// 好处：不存在两个变量指向同一数据
+// 数据的归属永远明确，释放时不会双重 free`}
+  insight="JS 的引用语义方便但隐藏了共享状态。Rust 的移动语义让数据归属一目了然，消灭了整类 bug。"
+/>
+
+### Copy 类型：小数据直接复制
+
+不是所有类型都 Move。**栈上的简单类型**实现了 `Copy` trait，赋值时直接复制值：
+
+```rust
+// i32、f64、bool、char 等实现了 Copy
+let x = 5;
+let y = x; // 复制，不是移动
+
+println!("{x}"); // ✓ x 依然有效
+println!("{y}"); // ✓
+
+// 规律：如果类型的所有部分都是 Copy，整体才是 Copy
+// String 不是 Copy（堆上分配，大小不固定）
+// i32 是 Copy（固定 4 字节，栈上）
+```
+
+---
+
+## 函数与所有权
+
+```rust
+fn main() {
+    let s = String::from("hello");
+    takes_ownership(s);      // s 的所有权移入函数
+    // println!("{s}");      // ✗ s 已被移走
+
+    let x = 5;
+    makes_copy(x);           // i32 是 Copy，x 依然有效
+    println!("{x}");         // ✓
+
+    // 方案：函数返回所有权
+    let s2 = gives_ownership();  // 接收返回值的所有权
+    println!("{s2}");
+}
+
+fn takes_ownership(s: String) {
+    println!("{s}");
+} // s 在这里被 drop
+
+fn makes_copy(n: i32) {
+    println!("{n}");
+} // n 被复制，原变量不受影响
+
+fn gives_ownership() -> String {
+    String::from("yours now")
+}
+```
+
+<Callout type="tip">
+  每次传参都移动所有权，用完还得 return 回来——太繁琐。Rust 的解决方案是**借用（borrowing）**。
+</Callout>
+
+---
+
+## 借用：引用不转移所有权
+
+```rust
+fn main() {
+    let s = String::from("hello");
+
+    // & 符号创建借用（引用）
+    let len = calculate_length(&s); // 借用 s，不移走
+
+    println!("'{s}' 的长度是 {len}"); // s 依然有效 ✓
+}
+
+// 参数类型是 &String，表示借用
+fn calculate_length(s: &String) -> usize {
+    s.len()
+} // s 是借用，函数结束自动归还，不 drop
+```
+
+### 借用规则
+
+Rust 在编译期强制执行两条规则，消灭所有数据竞争：
+
+```
+同一时刻，对同一数据，二选一：
+  ● 任意数量的不可变借用（&T）
+  ● 只能有一个可变借用（&mut T）
+两者不能同时存在
+```
+
+```rust
+fn main() {
+    let mut s = String::from("hello");
+
+    // 不可变借用：可以同时有多个
+    let r1 = &s;
+    let r2 = &s;
+    println!("{r1} and {r2}"); // ✓
+
+    // r1, r2 最后使用在上面这行，借用在这里结束
+    // （NLL：Non-Lexical Lifetimes，编译器足够聪明）
+
+    // 可变借用：只能有一个，且不能和不可变借用共存
+    let r3 = &mut s;
+    r3.push_str(", world");
+    println!("{r3}"); // ✓
+}
+```
+
+<CompareBlock
+  concept="并发安全"
+  jsLabel="JavaScript（单线程，无竞争但也无并行）"
+  rustLabel="Rust（多线程，编译期保证无数据竞争）"
+  js={`// JS 单线程，不存在真正的数据竞争
+// 但 async 代码的状态共享依然容易出 bug
+let data = [];
+async function writeA() { data.push("a"); }
+async function writeB() { data.push("b"); }
+// 谁先执行？取决于运行时调度，不确定`}
+  rust={`// Rust：借用规则在多线程中同样适用
+// 编译器保证不存在同时读写同一数据
+use std::thread;
+let mut data = vec![1, 2, 3];
+
+// 这会编译失败——编译器拒绝潜在数据竞争
+// thread::spawn(|| data.push(4)); // ✗
+// println!("{:?}", data);         // ✗
+
+// 正确方式：Arc<Mutex<T>> 或 channel`}
+  insight="Rust 的借用规则是多线程安全的基础。Send 和 Sync trait 在编译期保证跨线程数据传递的安全性。"
+/>
+
+---
+
+## Slice：借用集合的一部分
+
+```rust
+fn first_word(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    for (i, &byte) in bytes.iter().enumerate() {
+        if byte == b' ' {
+            return &s[..i]; // 返回第一个空格前的切片
+        }
+    }
+    &s[..] // 整个字符串
+}
+
+fn main() {
+    let s = String::from("hello world");
+    let word = first_word(&s); // 借用 s 的一部分
+
+    // s.clear(); // ✗ 编译错误：s 被可变借用时 word 还在用
+    println!("第一个词: {word}"); // ✓
+}
+```
+
+<Callout type="insight">
+  `&str`（字符串切片）和 `String` 是 Rust 新手最容易混淆的。简单记：`String` 是拥有所有权的堆上字符串；`&str` 是对字符串数据的借用视图，可以是对 `String` 的借用，也可以是字符串字面量。
+</Callout>
+
+---
+
+## 实战项目：内存安全字符串处理器
+
+<ProjectCard
+  title="内存安全字符串处理器"
+  description="通过实际操作 String、&str、Vec<String>，掌握所有权和借用在真实代码中的应用。"
+  skills={["String vs &str", "Vec 所有权", "函数参数借用", "迭代器与闭包"]}
+  command="cargo new string-processor && cd string-processor"
+  difficulty="初级"
+  estimatedTime="45 分钟"
+/>
+
+```rust
+// src/main.rs — 完整字符串处理器
+fn main() {
+    // 拥有所有权的字符串集合
+    let mut words: Vec<String> = Vec::new();
+
+    // push 移动所有权进 Vec
+    words.push(String::from("hello"));
+    words.push(String::from("world"));
+    words.push(String::from("rust"));
+
+    // 借用 Vec 进行只读操作
+    let total_chars = count_chars(&words);
+    println!("总字符数: {total_chars}");
+
+    // 借用 Vec，返回新数据（不修改原 Vec）
+    let upper = to_uppercase(&words);
+    println!("大写: {upper:?}");
+
+    // 可变借用：原地修改
+    filter_short(&mut words, 4);
+    println!("过滤后: {words:?}");
+
+    // words 在 main 结束时自动 drop
+}
+
+// &Vec<String> — 不可变借用
+fn count_chars(words: &Vec<String>) -> usize {
+    words.iter().map(|w| w.len()).sum()
+}
+
+// 返回新的 Vec，不修改原数据
+fn to_uppercase(words: &Vec<String>) -> Vec<String> {
+    words.iter().map(|w| w.to_uppercase()).collect()
+}
+
+// &mut Vec — 可变借用，原地修改
+fn filter_short(words: &mut Vec<String>, min_len: usize) {
+    words.retain(|w| w.len() >= min_len);
+}
+```
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="所有权与借用：内存模型可视化"
+  duration="49 秒精讲"
+  description="三条规则、Move、借用——Shelley 语音讲解。"
+  src="/videos/ch02-ownership.mp4"
+  subtitles="/subtitles/ch02-ownership.vtt"
+/>
+
+---
+
+## 本章小结
+
+你已经掌握了：
+
+- ✓ 所有权三条规则
+- ✓ Move vs Copy 语义
+- ✓ 借用（`&T` / `&mut T`）与借用规则
+- ✓ 函数参数与返回值的所有权
+- ✓ 字符串切片 `&str`
+
+下一章：[异步与并发](/chapter/async)——`async/await` 的 Rust 方式，以及所有权如何延伸到多线程。

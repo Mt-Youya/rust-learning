@@ -1,0 +1,252 @@
+export const frontmatter = {
+  title: "实战项目一：全栈任务管理系统",
+  subtitle: "Next.js + Axum + PostgreSQL + WebSocket",
+  chapter: 15,
+  slug: "project-fullstack",
+  duration: "8 小时",
+  project: "TaskForge — 实时协作任务管理系统",
+  status: "available",
+  description: "综合前四个阶段所有技能，构建一个生产级全栈应用：Rust Axum 后端 + Next.js 前端 + PostgreSQL 数据库 + WebSocket 实时协作 + JWT 认证 + Docker 部署。",
+  prev: "auth",
+  next: "devops",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 项目概览
+
+**TaskForge** 是一个类 Trello 的实时协作任务管理系统，综合本课程前 14 章所有核心技能。
+
+```
+taskforge/
+├── Cargo.toml           # Workspace 根
+├── crates/
+│   ├── api/             # Axum HTTP + WebSocket 服务
+│   │   ├── src/
+│   │   │   ├── main.rs
+│   │   │   ├── routes/  # handlers: boards, tasks, users
+│   │   │   ├── auth/    # JWT 中间件
+│   │   │   └── ws/      # WebSocket 实时同步
+│   │   └── Cargo.toml
+│   └── core/            # 共享类型和业务逻辑
+│       └── src/lib.rs
+├── frontend/            # Next.js 15 前端
+│   ├── app/
+│   └── package.json
+└── docker-compose.yml   # 本地开发环境
+```
+
+## 功能清单
+
+| 功能 | 技术 | 状态 |
+|------|------|------|
+| 用户注册/登录 | JWT + Argon2 | 核心 |
+| 看板 CRUD | Axum REST + SQLx | 核心 |
+| 任务拖拽排序 | WebSocket 广播 | 核心 |
+| 实时多人协作 | tokio-tungstenite | 核心 |
+| 文件上传 | multipart + S3 | 扩展 |
+| 邮件通知 | lettre | 扩展 |
+
+## 架构设计
+
+```
+┌─────────────────────┐     ┌──────────────────────┐
+│   Next.js Frontend  │────▶│   Axum API Server    │
+│                     │ REST│                      │
+│  - React Server Comp│◀────│  - /api/boards       │
+│  - Zustand State    │     │  - /api/tasks        │
+│  - TanStack Query   │     │  - /api/users        │
+└─────────────────────┘     │                      │
+         │                  │  WebSocket           │
+         │◀──────────────── │  /ws/board/:id       │
+         │    实时推送       └──────────┬───────────┘
+         │                             │
+         │                   ┌─────────▼─────────┐
+         │                   │    PostgreSQL      │
+         │                   │                   │
+         │                   │  boards / tasks   │
+         │                   │  users / events   │
+         └───────────────────└───────────────────┘
+```
+
+## 核心实现：WebSocket 实时同步
+
+```rust
+// crates/api/src/ws/mod.rs
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
+
+// 每个看板有独立的广播频道
+pub type BoardId = uuid::Uuid;
+pub struct WsState {
+    pub boards: RwLock<HashMap<BoardId, broadcast::Sender<WsEvent>>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WsEvent {
+    TaskCreated { task: TaskDto },
+    TaskMoved { task_id: Uuid, column_id: Uuid, position: i32 },
+    TaskDeleted { task_id: Uuid },
+    UserJoined { user_id: Uuid, username: String },
+}
+
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Path(board_id): Path<Uuid>,
+    Extension(claims): Extension<Claims>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_socket(socket, board_id, claims, state))
+}
+
+async fn handle_socket(
+    socket: WebSocket,
+    board_id: Uuid,
+    claims: Claims,
+    state: Arc<AppState>,
+) {
+    let (mut sender, mut receiver) = socket.split();
+
+    // 订阅该看板的广播
+    let mut rx = {
+        let boards = state.ws.boards.read().await;
+        boards.get(&board_id).map(|tx| tx.subscribe())
+    };
+
+    // 广播加入事件
+    broadcast_event(&state.ws, board_id, WsEvent::UserJoined {
+        user_id: claims.sub.parse().unwrap(),
+        username: claims.username.clone(),
+    }).await;
+
+    // 转发广播消息给当前连接
+    if let Some(mut rx) = rx {
+        let send_task = tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                let msg = serde_json::to_string(&event).unwrap();
+                if sender.send(Message::Text(msg)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // 接收客户端消息
+        while let Some(Ok(msg)) = receiver.next().await {
+            // 处理客户端发来的操作
+        }
+        send_task.abort();
+    }
+}
+```
+
+## 数据库 Schema
+
+```sql
+-- migrations/001_init.sql
+CREATE TABLE users (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email       TEXT UNIQUE NOT NULL,
+    username    TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE boards (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title       TEXT NOT NULL,
+    owner_id    UUID REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE tasks (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    board_id    UUID REFERENCES boards(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL,
+    description TEXT,
+    column_id   UUID NOT NULL,
+    position    INTEGER NOT NULL DEFAULT 0,
+    assignee_id UUID REFERENCES users(id),
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_tasks_board ON tasks(board_id);
+CREATE INDEX idx_tasks_column ON tasks(column_id, position);
+```
+
+## Next.js 前端集成
+
+```typescript
+// frontend/hooks/useBoard.ts
+import { useEffect } from 'react';
+import { useBoardStore } from '@/store/board';
+
+export function useRealtimeBoard(boardId: string) {
+  const { applyEvent } = useBoardStore();
+
+  useEffect(() => {
+    const ws = new WebSocket(`${process.env.NEXT_PUBLIC_WS_URL}/ws/board/${boardId}`);
+
+    ws.onmessage = (e) => {
+      const event = JSON.parse(e.data);
+      applyEvent(event); // Zustand store 处理事件
+    };
+
+    return () => ws.close();
+  }, [boardId]);
+}
+```
+
+<Callout type="insight">
+这个项目的核心挑战是**状态一致性**：多个用户同时操作时，WebSocket 广播保证所有客户端看到相同状态。Rust 的 `Arc<RwLock<_>>` 保证服务端内存状态的线程安全。
+</Callout>
+
+## Docker 本地开发
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: taskforge
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres/taskforge
+      JWT_SECRET: local-dev-secret-change-in-prod
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+```
+
+<VideoPlaceholder
+  title="TaskForge 完整构建演示"
+  description="8 小时完整实战：从 workspace 初始化、数据库设计、Axum API 实现、WebSocket 实时同步，到 Next.js 前端集成和 Docker 部署"
+/>
+
+<ProjectCard
+  title="TaskForge — 实时协作任务管理系统"
+  description="构建完整的全栈应用：Rust Axum 后端提供 REST API + WebSocket 实时推送，Next.js 15 前端实现看板 UI，PostgreSQL 持久化，JWT 认证，Argon2 密码安全，Docker 本地开发环境。"
+  skills={["Axum", "WebSocket", "SQLx", "JWT", "Next.js", "Docker", "Cargo Workspace"]}
+  startCommand="git clone https://github.com/rustforge/taskforge && cd taskforge && docker-compose up -d"
+/>

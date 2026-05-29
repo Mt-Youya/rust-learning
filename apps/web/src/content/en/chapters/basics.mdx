@@ -1,0 +1,350 @@
+export const frontmatter = {
+  title: "Getting Started: Installation & Cargo",
+  subtitle: "Understanding the Rust Toolchain from an npm Perspective",
+  chapter: 1,
+  slug: "basics",
+  duration: "3 hours",
+  project: "Temperature Converter CLI",
+  status: "available",
+  description: "rustup installation, Cargo workflow, your first Rust program — building a mental model of the Rust toolchain through the lens of npm/Node.js.",
+  prev: null,
+  next: "variables",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Why Should Frontend Engineers Learn Rust?
+
+You already understand JavaScript's async model, module system, and toolchain mindset. Rust doesn't tear those down — it adds a more precise layer of control on top.
+
+Writing for the web in JS is fast, but you're constantly fighting `undefined is not a function`, memory leaks, and concurrency bugs. Rust's answer is: **turn those problems into compile errors and solve them before the code ever runs**.
+
+<Callout type="insight">
+  **Frontend perspective**: Just as TypeScript moves JS type errors to compile time, Rust moves memory errors and concurrency bugs to compile time as well. The difference is that Rust is more thorough — zero runtime overhead.
+</Callout>
+
+## Your First Rust Program
+
+After installing Rust, run the following in your terminal:
+
+```bash
+rustup update
+cargo new hello-rust
+cd hello-rust
+cargo run
+```
+
+You'll see `Hello, world!`. Note: `cargo` is Rust's `npm` — package management, building, and testing all in one.
+
+---
+
+## Variables and Immutability
+
+<CompareBlock
+  concept="Variable Declaration"
+  jsLabel="JavaScript"
+  rustLabel="Rust"
+  js={`// JS: let is mutable by default, const prevents reassignment
+let count = 0;
+count = 1; // ✓
+
+const name = "Alice";
+// name = "Bob"; // ✗ TypeError
+
+// but const object contents are still mutable
+const user = { age: 25 };
+user.age = 26; // ✓ this doesn't exist in Rust`}
+  rust={`// Rust: let is immutable by default, mut enables mutability
+let count = 0;
+// count = 1; // ✗ compile error
+
+let mut count = 0;
+count = 1; // ✓
+
+// immutable = truly immutable, including fields
+let user = User { age: 25 };
+// user.age = 26; // ✗ compile error`}
+  insight="Rust's immutability is truly immutable — guaranteed by the compiler, with no exceptions. This makes concurrent code naturally safe, since read-only data can be freely shared."
+/>
+
+### Shadowing: Re-declaring Variables with the Same Name
+
+Rust has a feature JS doesn't — **variable shadowing**:
+
+```rust
+fn main() {
+    let x = 5;
+    let x = x + 1; // new x shadows old x, valid
+
+    {
+        let x = x * 2; // only valid inside this block
+        println!("inner x = {x}"); // 12
+    }
+
+    println!("outer x = {x}"); // 6
+}
+```
+
+The difference from `mut`: shadowing can change the **type**, while `mut` cannot.
+
+```rust
+let spaces = "   ";          // &str type
+let spaces = spaces.len();   // usize type, valid!
+
+let mut spaces = "   ";
+// spaces = spaces.len(); // ✗ type mismatch, compile error
+```
+
+---
+
+## Type System
+
+Rust is statically and strongly typed, but most of the time **type inference** saves you from writing annotations.
+
+```rust
+// inferred as i32
+let x = 5;
+
+// inferred as Vec<i32>
+let numbers = vec![1, 2, 3];
+
+// when inference fails, annotation is required
+let parsed: i32 = "42".parse().unwrap();
+```
+
+### Scalar Types
+
+| Type | Example | JS Equivalent |
+|------|---------|---------------|
+| `i32` / `u32` | `42_i32` | `number` |
+| `f64` | `3.14` | `number` |
+| `bool` | `true` / `false` | `boolean` |
+| `char` | `'🦀'` | No direct equivalent |
+
+<Callout type="tip">
+  The `i` prefix means signed integer, `u` means unsigned integer, and the number is the bit width. `i32` = 32-bit signed integer, range -2³¹ to 2³¹-1. It's recommended to default to `i32` and only consider `u8` / `u64` etc. when optimizing for performance.
+</Callout>
+
+### Compound Types
+
+```rust
+// Tuple: fixed length, elements can have different types (similar to JS destructuring)
+let point = (3.0_f64, -1.5_f64);
+let (x, y) = point; // destructuring
+
+// Array: fixed length, all elements have the same type
+let arr = [1, 2, 3, 4, 5];
+let first = arr[0];
+let len = arr.len();
+
+// Note: out-of-bounds access panics at runtime, not undefined!
+```
+
+---
+
+## Functions
+
+```rust
+// fn keyword, parameters must have type annotations
+fn add(a: i32, b: i32) -> i32 {
+    a + b  // no semicolon = implicit return (expression)
+}
+
+// equivalent to:
+fn add_explicit(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+// no return value (returns unit type (), similar to JS void)
+fn greet(name: &str) {
+    println!("Hello, {name}!");
+}
+```
+
+<Callout type="insight">
+  **Expressions vs. statements**: Rust distinguishes between the two. An expression without a semicolon is the return value; a statement with a semicolon returns `()`. This means `if` / `match` can both be used directly as values.
+</Callout>
+
+### Closures
+
+```rust
+// Rust closures are similar to JS arrow functions
+let double = |x| x * 2;
+let add = |a, b| a + b;
+
+// capturing the environment (move keyword forces ownership transfer)
+let factor = 3;
+let multiply = |x| x * factor; // borrows factor
+
+// used with iterators, very idiomatic
+let numbers = vec![1, 2, 3, 4, 5];
+let doubled: Vec<i32> = numbers.iter().map(|x| x * 2).collect();
+let evens: Vec<&i32> = numbers.iter().filter(|x| *x % 2 == 0).collect();
+```
+
+---
+
+## Control Flow
+
+### if Expressions
+
+```rust
+// Rust's if is an expression, can be used in assignments directly
+let number = 7;
+let description = if number % 2 == 0 { "even" } else { "odd" };
+println!("{number} is {description}");
+
+// analogous to JS ternary: number % 2 === 0 ? "even" : "odd"
+```
+
+### match: Far More Powerful Than switch
+
+```rust
+let code = 200_u32;
+let status = match code {
+    200 => "OK",
+    404 => "Not Found",
+    500 => "Server Error",
+    400..=499 => "Client Error",  // range matching
+    _ => "Unknown",               // wildcard, must be exhaustive
+};
+
+// the power of match on enums
+#[derive(Debug)]
+enum Shape { Circle(f64), Rectangle(f64, f64) }
+
+let shape = Shape::Circle(3.0);
+let area = match shape {
+    Shape::Circle(r) => std::f64::consts::PI * r * r,
+    Shape::Rectangle(w, h) => w * h,
+};
+```
+
+### loop / while / for
+
+```rust
+// loop = infinite loop, can return a value
+let result = loop {
+    let x = do_something();
+    if x > 10 { break x * 2; } // break carries a value
+};
+
+// while
+let mut i = 0;
+while i < 5 { i += 1; }
+
+// for...in (the most idiomatic way to iterate)
+for item in &[1, 2, 3] {
+    println!("{item}");
+}
+
+// with index
+for (i, item) in ["a", "b", "c"].iter().enumerate() {
+    println!("{i}: {item}");
+}
+```
+
+---
+
+## Hands-On Project: TODO CLI Tool
+
+<ProjectCard
+  title="TODO CLI Tool"
+  description="Build a fully functional command-line TODO manager in Rust, reinforcing all the core concepts from this chapter."
+  skills={["Vec operations", "match pattern matching", "structs", "enums", "stdin/stdout"]}
+  command="cargo new todo-cli && cd todo-cli"
+  difficulty="Beginner"
+  estimatedTime="45 minutes"
+/>
+
+```rust
+// src/main.rs — complete TODO CLI implementation
+use std::io::{self, BufRead};
+
+#[derive(Debug)]
+struct Todo {
+    id: usize,
+    text: String,
+    done: bool,
+}
+
+fn main() {
+    let mut todos: Vec<Todo> = Vec::new();
+    let mut next_id = 1_usize;
+    let stdin = io::stdin();
+
+    println!("📝 Rust TODO CLI");
+    println!("Commands: add <text> | done <id> | list | quit");
+
+    for line in stdin.lock().lines() {
+        let line = line.unwrap();
+        let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
+
+        match parts.as_slice() {
+            ["add", text] => {
+                todos.push(Todo { id: next_id, text: text.to_string(), done: false });
+                println!("✓ Added #{next_id}: {text}");
+                next_id += 1;
+            }
+            ["done", id_str] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    if let Some(todo) = todos.iter_mut().find(|t| t.id == id) {
+                        todo.done = true;
+                        println!("✓ Completed #{id}: {}", todo.text);
+                    } else {
+                        println!("✗ Not found #{id}");
+                    }
+                }
+            }
+            ["list"] => {
+                if todos.is_empty() {
+                    println!("(empty)");
+                }
+                for todo in &todos {
+                    let mark = if todo.done { "✓" } else { "○" };
+                    println!("{mark} #{}: {}", todo.id, todo.text);
+                }
+            }
+            ["quit"] => break,
+            _ => println!("Unknown command, try: list / add <text> / done <id> / quit"),
+        }
+    }
+}
+```
+
+<Callout type="tip">
+  Run `cargo run`, then try `add learn Rust`, `list`, `done 1`.  
+  Notice the power of `match parts.as_slice()` — patterns directly destructure the slice, far more elegant than a chain of `if/else if` in JS.
+</Callout>
+
+---
+
+## Project Video
+
+<VideoPlaceholder
+  title="Rust Basics: Variables, Types, Functions, match"
+  duration="1-minute overview"
+  description="A walkthrough of Rust fundamentals from a JavaScript perspective."
+  src="/videos/ch01-basics.mp4"
+  subtitles="/subtitles/ch01-basics.vtt"
+/>
+
+---
+
+## Chapter Summary
+
+You now know:
+
+- ✓ Variable immutability and `mut` / shadowing
+- ✓ The basic type system and type inference
+- ✓ Functions, closures, expressions vs. statements
+- ✓ `match` pattern matching
+- ✓ Iterator basics
+
+Next chapter: [Ownership & Borrowing](/chapter/ownership) — Rust's most revolutionary core concept, brought to life with memory animations.

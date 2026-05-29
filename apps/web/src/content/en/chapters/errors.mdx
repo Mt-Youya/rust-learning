@@ -1,0 +1,158 @@
+export const frontmatter = {
+  title: "Error Handling",
+  subtitle: "Result, the ? Operator, and Custom Errors",
+  chapter: 5,
+  slug: "errors",
+  duration: "3 hours",
+  project: "CSV Parser",
+  status: "available",
+  description: "Result<T,E>, the ? operator, thiserror custom errors, anyhow application-level errors — leave the uncertainty of try-catch behind.",
+  prev: "structs",
+  next: "generics",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Error Handling Philosophy
+
+JavaScript's `try-catch` has a fundamental problem: you never know whether a function might throw unless you read the docs or get burned.
+
+Rust's rule: **operations that can fail must reflect that in the type signature**.
+
+<CompareBlock
+  concept="Error Handling"
+  jsLabel="TypeScript (try-catch)"
+  rustLabel="Rust (Result)"
+  js={`// you don't know if this function will throw
+async function readFile(path: string): Promise<string> {
+  try {
+    return await fs.readFile(path, 'utf8');
+  } catch (e) {
+    throw new Error(\`read failed: \${e}\`);
+  }
+}`}
+  rust={`use std::fs;
+
+// the signature tells you directly: may succeed returning String, or fail returning io::Error
+fn read_file(path: &str) -> Result<String, std::io::Error> {
+    fs::read_to_string(path)  // ? propagates the error
+}
+
+// the caller must handle both cases
+match read_file("data.txt") {
+    Ok(content) => println!("{}", content),
+    Err(e)      => eprintln!("error: {}", e),
+}`}
+  insight="Result makes errors part of the type. You cannot ignore them — the compiler will remind you. This is the core value of Rust's error handling."
+/>
+
+---
+
+## The ? Operator: Elegant Error Propagation
+
+`?` is like `await` — it eliminates the boilerplate of error propagation:
+
+```rust
+use std::io;
+use std::fs;
+
+fn read_username() -> Result<String, io::Error> {
+    // ?: on success continue, on failure immediately return Err
+    let content = fs::read_to_string("username.txt")?;
+    Ok(content.trim().to_string())
+}
+
+// chained ? operations
+fn parse_config() -> Result<Config, io::Error> {
+    let json = fs::read_to_string("config.json")?;
+    let config: Config = serde_json::from_str(&json)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    Ok(config)
+}
+```
+
+---
+
+## Custom Errors: thiserror
+
+```toml
+[dependencies]
+thiserror = "1"
+anyhow = "1"
+```
+
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+enum AppError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("parse error (line {line}): {msg}")]
+    Parse { line: usize, msg: String },
+
+    #[error("user {0} not found")]
+    NotFound(String),
+}
+
+// ? automatically converts io::Error to AppError::Io
+fn process_file(path: &str) -> Result<Vec<Record>, AppError> {
+    let content = std::fs::read_to_string(path)?;  // io::Error → AppError::Io
+    parse_records(&content)
+}
+```
+
+<Callout type="tip">
+  **Use thiserror for library code**: define precise error types so callers can `match` different cases.<br />
+  **Use anyhow for application code**: propagate errors quickly with useful context.
+</Callout>
+
+---
+
+## anyhow: Application-Level Error Handling
+
+```rust
+use anyhow::{Context, Result};
+
+fn load_app() -> Result<App> {
+    let config = fs::read_to_string("config.json")
+        .context("config.json not found")?;
+
+    let settings: Settings = serde_json::from_str(&config)
+        .context("config file format error")?;
+
+    App::init(settings).context("application initialization failed")
+}
+```
+
+---
+
+## Hands-On Project: CSV Parser
+
+<ProjectCard
+  title="CSV File Parser"
+  description="Read a CSV file, parse each row, handle all possible error cases — format errors, type errors, missing files — and output a clear error report."
+  skills={["thiserror custom errors", "? error propagation", "anyhow::Context", "user-friendly error messages"]}
+  command="cargo new csv-parser && cd csv-parser"
+  difficulty="Intermediate"
+  estimatedTime="60 minutes"
+/>
+
+---
+
+## Project Video
+
+<VideoPlaceholder
+  title="Rust Error Handling: Result and ?"
+  duration="20-minute deep dive"
+  description="Result type, ? operator, and a comparison of thiserror vs. anyhow use cases."
+  src="/videos/ch05-errors.mp4"
+  subtitles="/subtitles/ch05-errors.vtt"
+/>

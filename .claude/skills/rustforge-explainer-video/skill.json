@@ -1,0 +1,16 @@
+{
+  "name": "rustforge-course-video-skill",
+  "version": "2.0.0",
+  "description": "Project-specific Agent Skill for generating RustForge MDX chapters, narration scripts, video slides, subtitles, 3D visualization plans, and Python-ready patches.",
+  "default_language": "zh-CN",
+  "target_project": "RustForge",
+  "primary_outputs": [
+    "MDX chapter",
+    "SCRIPTS[n]",
+    "CHAPTERS[n]",
+    "SLIDES[n]",
+    "WebVTT subtitles",
+    "3D visualization plan",
+    "hands-on exercise"
+  ]
+}

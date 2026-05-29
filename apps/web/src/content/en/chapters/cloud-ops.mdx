@@ -1,0 +1,265 @@
+export const frontmatter = {
+  title: "Cloud-Native Operations",
+  subtitle: "Kubernetes · Observability · SRE Practices",
+  chapter: 17,
+  slug: "cloud-ops",
+  duration: "5 hours",
+  project: "Production-Grade Cloud-Native Deployment Architecture",
+  status: "available",
+  description: "Helm deployment of Rust services, Prometheus + Grafana monitoring, OpenTelemetry distributed tracing, rolling updates and blue-green deployments — master the complete toolchain for running Rust services reliably on Kubernetes.",
+  prev: "devops",
+  next: "ai",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Kubernetes Advantages for Rust Services
+
+Rust compiles to a single static binary, making it a natural fit for containerization:
+
+| Metric | Node.js Image | Rust Image |
+|--------|--------------|------------|
+| Base Image | node:20 ~1.1GB | scratch / distroless ~10MB |
+| Startup Time | ~2-3s | ~50ms |
+| Memory (idle) | ~80MB | ~5MB |
+| CPU Usage (idle) | ~1% constant | near 0% |
+
+## Extremely Compact Docker Images
+
+```dockerfile
+# Multi-stage build: builder + distroless runtime
+FROM rust:1.82-slim AS builder
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+
+# Static linking: eliminate system library dependencies
+RUN rustup target add x86_64-unknown-linux-musl
+RUN apt-get update && apt-get install -y musl-tools
+RUN cargo build --release --target x86_64-unknown-linux-musl
+
+# Final image: no shell, no package manager, binary only
+FROM gcr.io/distroless/static-debian12
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/api /api
+EXPOSE 3001
+ENTRYPOINT ["/api"]
+```
+
+<Callout type="insight">
+`distroless` images contain no shell or system tools — even if an attacker breaks through the application layer, they cannot execute system commands. Combined with musl static linking, the final image is only ~8MB with a minimal attack surface.
+</Callout>
+
+## Kubernetes Deployment Manifest
+
+```yaml
+# k8s/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskforge-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: taskforge-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0       # zero-downtime rolling update
+  template:
+    metadata:
+      labels:
+        app: taskforge-api
+      annotations:
+        prometheus.io/scrape: "true"   # auto-discover metrics
+        prometheus.io/port: "9090"
+    spec:
+      containers:
+      - name: api
+        image: ghcr.io/myorg/taskforge-api:v1.2.3
+        ports:
+        - containerPort: 3001
+        - containerPort: 9090  # Prometheus metrics port
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: taskforge-secrets
+              key: database-url
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3001
+```
+
+## Exposing Prometheus Metrics in Rust
+
+```toml
+[dependencies]
+prometheus = "0.13"
+axum-prometheus = "0.6"
+```
+
+```rust
+use axum_prometheus::PrometheusMetricLayer;
+use prometheus::{Counter, Histogram, register_counter, register_histogram};
+
+lazy_static::lazy_static! {
+    static ref HTTP_REQUESTS_TOTAL: Counter = register_counter!(
+        "http_requests_total",
+        "Total HTTP requests"
+    ).unwrap();
+
+    static ref HTTP_REQUEST_DURATION: Histogram = register_histogram!(
+        "http_request_duration_seconds",
+        "HTTP request duration"
+    ).unwrap();
+
+    static ref ACTIVE_WS_CONNECTIONS: prometheus::Gauge = prometheus::register_gauge!(
+        "active_websocket_connections",
+        "Number of active WebSocket connections"
+    ).unwrap();
+}
+
+pub fn metrics_router() -> Router {
+    Router::new()
+        .route("/metrics", get(prometheus_metrics_handler))
+}
+
+// automatically add HTTP metrics to all routes
+let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+let app = Router::new()
+    .merge(api_router())
+    .layer(prometheus_layer);
+```
+
+## OpenTelemetry Distributed Tracing
+
+```toml
+[dependencies]
+opentelemetry = "0.22"
+opentelemetry-jaeger = "0.21"
+tracing-opentelemetry = "0.23"
+tracing = "0.1"
+```
+
+```rust
+use opentelemetry::global;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+fn init_tracing() {
+    let tracer = opentelemetry_jaeger::new_agent_pipeline()
+        .with_service_name("taskforge-api")
+        .install_batch(opentelemetry::runtime::Tokio)
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+}
+
+// create span in handler
+#[tracing::instrument(skip(pool), fields(board_id = %id))]
+async fn get_board(
+    Path(id): Path<Uuid>,
+    State(pool): State<PgPool>,
+) -> Result<Json<Board>, StatusCode> {
+    let board = sqlx::query_as!(Board, "SELECT * FROM boards WHERE id = $1", id)
+        .fetch_one(&pool)
+        .await
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok(Json(board))
+}
+```
+
+## HPA: Horizontal Pod Autoscaling
+
+```yaml
+# k8s/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: taskforge-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: taskforge-api
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
+  - type: Pods
+    pods:
+      metric:
+        name: active_websocket_connections  # custom metric
+      target:
+        type: AverageValue
+        averageValue: "500"   # max 500 WS connections per Pod
+```
+
+<Callout type="tip">
+Scaling based on custom metrics (WebSocket connection count) is more accurate than CPU-based scaling — Rust services have extremely low CPU usage, making it hard to trigger scaling on CPU alone. Exposing business metrics to HPA is a production best practice.
+</Callout>
+
+## Blue-Green Deployment Strategy
+
+```bash
+# implement blue-green deployment with kubectl
+# current production points to blue deployment
+
+# 1. deploy green version (new version)
+kubectl apply -f k8s/deployment-green.yaml
+
+# 2. wait for green to be ready
+kubectl rollout status deployment/taskforge-api-green
+
+# 3. run smoke tests
+./scripts/smoke-test.sh green
+
+# 4. switch traffic to green
+kubectl patch service taskforge-api \
+  -p '{"spec":{"selector":{"version":"green"}}}'
+
+# 5. observe for 30 seconds, delete blue if no issues
+kubectl delete deployment taskforge-api-blue
+```
+
+<VideoPlaceholder
+  title="K8s Cloud-Native Deployment End-to-End Demo"
+  description="From local Docker Compose to a k3s cluster: deploying an Axum service, configuring Prometheus scraping, Grafana dashboards, OpenTelemetry tracing, and HPA load-test autoscaling demo"
+/>
+
+<ProjectCard
+  title="Production-Grade Cloud-Native Deployment Architecture"
+  description="Deploy TaskForge to a k3s cluster: distroless image build, K8s Deployment + Service + Ingress, Prometheus metrics exposure, Grafana monitoring dashboard, OpenTelemetry tracing integrated with Jaeger, and HPA autoscaling configuration."
+  skills={["Kubernetes", "Prometheus", "Grafana", "OpenTelemetry", "HPA", "Blue-Green Deployment"]}
+  startCommand="k3d cluster create taskforge && kubectl apply -f k8s/"
+/>

@@ -1,0 +1,157 @@
+export const frontmatter = {
+  title: "泛型、Trait 与生命周期",
+  subtitle: "零成本抽象与引用安全的秘密",
+  chapter: 6,
+  slug: "generics",
+  duration: "4 小时",
+  project: "词频统计器",
+  status: "available",
+  description: "泛型消除重复代码、Trait 定义共享行为、生命周期标注验证引用安全——理解 Rust 编译器如何在零运行时成本下保证内存安全。",
+  prev: "errors",
+  next: "collections",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 泛型：写一次，处理多种类型
+
+<CompareBlock
+  concept="泛型函数"
+  jsLabel="TypeScript"
+  rustLabel="Rust"
+  js={`function largest<T extends number | string>(list: T[]): T {
+  return list.reduce((a, b) => a > b ? a : b);
+}`}
+  rust={`// T: PartialOrd 是 Trait 约束，相当于 TypeScript 的 extends
+fn largest<T: PartialOrd>(list: &[T]) -> &T {
+    let mut largest = &list[0];
+    for item in list {
+        if item > largest {
+            largest = item;
+        }
+    }
+    largest
+}`}
+  insight="Rust 泛型在编译时单态化——为每种实际类型生成专用代码，不是运行时多态，没有虚函数调用的开销。这就是零成本抽象。"
+/>
+
+---
+
+## Trait：定义共享行为
+
+Trait 类似 TypeScript interface，但可以有默认实现：
+
+```rust
+trait Summary {
+    fn author(&self) -> String;  // 必须实现
+    
+    // 默认实现
+    fn summarize(&self) -> String {
+        format!("作者：{}", self.author())
+    }
+}
+
+struct Article { title: String, author: String }
+struct Tweet   { username: String, content: String }
+
+impl Summary for Article {
+    fn author(&self) -> String { self.author.clone() }
+    // 使用 summarize 的默认实现
+}
+
+impl Summary for Tweet {
+    fn author(&self) -> String { format!("@{}", self.username) }
+    fn summarize(&self) -> String {
+        format!("@{}: {}", self.username, self.content)
+    }
+}
+```
+
+函数参数接受任意实现了 Trait 的类型：
+
+```rust
+fn notify(item: &impl Summary) {
+    println!("{}", item.summarize());
+}
+```
+
+---
+
+## 迭代器：惰性高性能链式操作
+
+<CompareBlock
+  concept="集合操作"
+  jsLabel="JavaScript"
+  rustLabel="Rust"
+  js={`// 三次遍历，三次中间数组
+const result = [1,2,3,4,5,6,7,8,9,10]
+  .filter(x => x % 2 === 0)
+  .map(x => x * x)
+  .slice(0, 3);`}
+  rust={`// 惰性求值，collect 时才触发，只遍历一次
+let result: Vec<i32> = (1..=10)
+    .filter(|x| x % 2 == 0)   // 适配器：惰性
+    .map(|x| x * x)            // 适配器：惰性
+    .take(3)                    // 适配器：惰性
+    .collect();                 // 消费器：触发执行`}
+  insight="Rust 迭代器是惰性的，整个链只遍历一次，而且 LLVM 通常能自动 SIMD 向量化。比 JS 的 Array 方法链效率高得多。"
+/>
+
+常用迭代器方法：
+
+```rust
+let v = vec![1, 2, 3, 4, 5];
+
+v.iter().sum::<i32>()                    // 15
+v.iter().any(|&x| x > 3)                // true
+v.iter().all(|&x| x > 0)                // true
+v.iter().max()                           // Some(5)
+v.iter().enumerate().for_each(|(i, x)| println!("{}: {}", i, x));
+v.iter().zip(&v).map(|(a, b)| a + b).collect::<Vec<_>>();
+v.iter().fold(0, |acc, x| acc + x)      // 15（同 reduce）
+```
+
+---
+
+## 常用 Derive Trait
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Config {
+    host: String,
+    port: u16,
+}
+```
+
+`#[derive]` 宏自动实现常用 Trait，不需要手写样板代码。
+
+---
+
+## 实战项目：词频统计器
+
+<ProjectCard
+  title="词频统计器"
+  description="输入文本，用迭代器链式操作统计词频，输出 Top 10 高频词。全程不写一行 for 循环。"
+  skills={["迭代器链式操作", "HashMap fold", "sort_by 自定义排序", "闭包捕获"]}
+  command="cargo new word-freq && cd word-freq"
+  difficulty="中级"
+  estimatedTime="45 分钟"
+/>
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="泛型、Trait 与迭代器"
+  duration="20 分钟精讲"
+  description="零成本抽象原理、Trait 对象 vs 泛型、迭代器惰性求值的性能优势。"
+  src="/videos/ch06-generics.mp4"
+  subtitles="/subtitles/ch06-generics.vtt"
+/>

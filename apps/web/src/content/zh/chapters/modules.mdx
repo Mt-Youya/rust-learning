@@ -1,0 +1,191 @@
+export const frontmatter = {
+  title: "模块系统与 Cargo 生态",
+  subtitle: "代码组织 · 包管理 · Workspace",
+  chapter: 9,
+  slug: "modules",
+  duration: "2 小时",
+  project: "发布一个 Crates.io 工具库",
+  status: "available",
+  description: "mod 组织代码、pub 控制可见性、use 引入路径、Cargo workspace 管理 monorepo、Crates.io 发布——像管理 npm 包一样管理 Rust 项目。",
+  prev: "concurrency",
+  next: "testing",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## Cargo 项目结构
+
+<CompareBlock
+  jsTitle="Node.js 项目结构"
+  rustTitle="Rust Cargo 项目结构"
+  js={`my-project/
+├── package.json     # 依赖声明
+├── node_modules/    # 依赖目录
+├── src/
+│   ├── index.js
+│   └── utils.js
+└── .gitignore`}
+  rust={`my-project/
+├── Cargo.toml       # 依赖声明（= package.json）
+├── Cargo.lock       # 锁文件（= package-lock.json）
+├── src/
+│   ├── main.rs      # 二进制入口
+│   ├── lib.rs       # 库入口（可选）
+│   └── utils.rs     # 模块文件
+└── .gitignore`}
+/>
+
+## 模块系统
+
+```rust
+// src/lib.rs
+mod garden;          // 声明模块，对应 src/garden.rs
+mod kitchen {        // 内联模块
+    pub fn cook() { println!("cooking!"); }
+}
+
+pub use garden::Vegetable; // 重新导出，简化外部路径
+```
+
+```rust
+// src/garden.rs
+pub struct Vegetable {
+    pub name: String,
+    calories: u32, // 私有字段
+}
+
+impl Vegetable {
+    pub fn new(name: &str) -> Vegetable {
+        Vegetable { name: name.to_string(), calories: 0 }
+    }
+}
+
+pub mod seasonal; // 嵌套子模块，对应 src/garden/seasonal.rs
+```
+
+<Callout type="insight">
+Rust 的可见性默认**私有**，`pub` 显式公开。这与 JS 相反（默认导出需要 `export`），但更安全：API 边界一目了然，不会意外暴露内部实现。
+</Callout>
+
+## use：路径简化
+
+```rust
+use std::collections::HashMap;
+use std::io::{self, Write};  // 同时引入 io 和 io::Write
+use crate::garden::Vegetable; // crate:: 表示当前 crate 根
+
+// as 重命名
+use std::fmt::Result as FmtResult;
+use std::io::Result as IoResult;
+```
+
+## Cargo.toml：依赖管理
+
+```toml
+[package]
+name = "my-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = "0.11"
+
+[dev-dependencies]   # 仅测试用
+criterion = "0.5"
+
+[features]           # 可选特性
+default = []
+postgres = ["sqlx/postgres"]
+```
+
+<Callout type="tip">
+`features` 系统是 Rust 生态的核心设计——crate 默认只编译必要代码，用户按需开启功能。这让二进制更小、编译更快，类比 tree-shaking 但发生在编译期。
+</Callout>
+
+## Cargo Workspace：Monorepo
+
+```toml
+# workspace/Cargo.toml（根目录）
+[workspace]
+members = [
+    "crates/core",
+    "crates/web",
+    "crates/cli",
+]
+resolver = "2"
+```
+
+```
+workspace/
+├── Cargo.toml          # workspace 根
+├── Cargo.lock          # 共享锁文件
+└── crates/
+    ├── core/           # 共享逻辑库
+    │   ├── Cargo.toml
+    │   └── src/lib.rs
+    ├── web/            # Axum Web 服务
+    │   ├── Cargo.toml  # 依赖 core
+    │   └── src/main.rs
+    └── cli/            # CLI 工具
+        ├── Cargo.toml  # 依赖 core
+        └── src/main.rs
+```
+
+```toml
+# crates/web/Cargo.toml
+[dependencies]
+core = { path = "../core" }  # 本地依赖
+```
+
+## 发布到 Crates.io
+
+```bash
+# 登录（需要 crates.io 账号）
+cargo login <token>
+
+# 检查发布前
+cargo check
+cargo test
+cargo doc --open   # 预览文档
+
+# 发布
+cargo publish
+```
+
+```rust
+// 文档注释自动生成 docs.rs 页面
+/// 将摄氏度转换为华氏度。
+///
+/// # Examples
+/// ```
+/// use my_crate::celsius_to_fahrenheit;
+/// assert_eq!(celsius_to_fahrenheit(0.0), 32.0);
+/// ```
+pub fn celsius_to_fahrenheit(c: f64) -> f64 {
+    c * 9.0 / 5.0 + 32.0
+}
+```
+
+<Callout type="note">
+`///` 注释中的 `# Examples` 代码块会被 `cargo test` 自动执行——文档即测试，文档永远是最新的。
+</Callout>
+
+<VideoPlaceholder
+  title="Cargo Workspace 实战"
+  description="从单 crate 项目演进到 workspace monorepo：拆分 core/web/cli 三个 crate，共享类型定义，统一依赖版本管理"
+/>
+
+<ProjectCard
+  title="发布一个 Crates.io 工具库"
+  description="构建一个字节格式化工具库（bytes-fmt）：提供人类可读的字节大小显示（1.5 KB, 2.3 MB），添加完整文档注释、单元测试、示例代码，发布到 Crates.io。"
+  skills={["模块系统", "Cargo.toml", "文档注释", "cargo publish"]}
+  startCommand="cargo new bytes-fmt --lib && cd bytes-fmt"
+/>

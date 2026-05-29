@@ -1,0 +1,350 @@
+export const frontmatter = {
+  title: "入门：安装与 Cargo",
+  subtitle: "从 npm 视角理解 Rust 工具链",
+  chapter: 1,
+  slug: "basics",
+  duration: "3 小时",
+  project: "温度转换 CLI",
+  status: "available",
+  description: "rustup 安装、Cargo 工作流、第一个 Rust 程序——用你熟悉的 npm/Node.js 视角，建立 Rust 工具链认知。",
+  prev: null,
+  next: "variables",
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 为什么前端工程师学 Rust？
+
+你已经掌握了 JavaScript 的异步模型、模块系统、工具链思维。Rust 不会推翻这些——它会在上面加一层更精确的控制。
+
+用 JS 写 Web 很快，但你总在跟 `undefined is not a function`、内存泄漏、并发 bug 打交道。Rust 的答案是：**把这些问题变成编译错误，在代码运行前解决**。
+
+<Callout type="insight">
+  **前端视角**：就像 TypeScript 把 JS 的类型错误提前到编译期，Rust 把内存错误和并发 bug 也提前到编译期。区别是 Rust 更彻底——零运行时开销。
+</Callout>
+
+## 第一个 Rust 程序
+
+安装 Rust 后，在终端运行：
+
+```bash
+rustup update
+cargo new hello-rust
+cd hello-rust
+cargo run
+```
+
+你会看到 `Hello, world!`。注意：`cargo` 就是 Rust 的 `npm`——包管理、构建、测试一体。
+
+---
+
+## 变量与不可变性
+
+<CompareBlock
+  concept="变量声明"
+  jsLabel="JavaScript"
+  rustLabel="Rust"
+  js={`// JS：let 默认可变，const 阻止重新赋值
+let count = 0;
+count = 1; // ✓
+
+const name = "Alice";
+// name = "Bob"; // ✗ TypeError
+
+// 但 const 对象内容仍可变
+const user = { age: 25 };
+user.age = 26; // ✓ 这在 Rust 中不存在`}
+  rust={`// Rust：let 默认不可变，mut 开启可变性
+let count = 0;
+// count = 1; // ✗ 编译错误
+
+let mut count = 0;
+count = 1; // ✓
+
+// 不可变 = 真正不可变，包括内部字段
+let user = User { age: 25 };
+// user.age = 26; // ✗ 编译错误`}
+  insight="Rust 的不可变是真正的不可变——编译器保证，没有例外。这让并发代码天然安全，因为只读数据可以自由共享。"
+/>
+
+### Shadowing：重新声明同名变量
+
+Rust 有个 JS 没有的特性——**变量遮蔽（shadowing）**：
+
+```rust
+fn main() {
+    let x = 5;
+    let x = x + 1; // 新的 x 遮蔽旧的 x，合法
+
+    {
+        let x = x * 2; // 只在这个块内有效
+        println!("内部 x = {x}"); // 12
+    }
+
+    println!("外部 x = {x}"); // 6
+}
+```
+
+这和 `mut` 的区别：shadowing 可以改变**类型**，`mut` 不行。
+
+```rust
+let spaces = "   ";          // &str 类型
+let spaces = spaces.len();   // usize 类型，合法！
+
+let mut spaces = "   ";
+// spaces = spaces.len(); // ✗ 类型不匹配，编译错误
+```
+
+---
+
+## 类型系统
+
+Rust 是静态强类型，但大多数时候**类型推断**帮你省去标注。
+
+```rust
+// 推断为 i32
+let x = 5;
+
+// 推断为 Vec<i32>
+let numbers = vec![1, 2, 3];
+
+// 无法推断时，必须标注
+let parsed: i32 = "42".parse().unwrap();
+```
+
+### 标量类型
+
+| 类型 | 示例 | JS 对应 |
+|------|------|---------|
+| `i32` / `u32` | `42_i32` | `number` |
+| `f64` | `3.14` | `number` |
+| `bool` | `true` / `false` | `boolean` |
+| `char` | `'🦀'` | 无直接对应 |
+
+<Callout type="tip">
+  `i` 前缀 = 有符号整数，`u` 前缀 = 无符号整数，数字是位宽。`i32` = 32位有符号整数，范围 -2³¹ 到 2³¹-1。推荐默认用 `i32`，需要性能优化时再考虑 `u8` / `u64` 等。
+</Callout>
+
+### 复合类型
+
+```rust
+// Tuple：固定长度，元素类型可不同（类似 JS 解构）
+let point = (3.0_f64, -1.5_f64);
+let (x, y) = point; // 解构
+
+// Array：固定长度，元素类型相同
+let arr = [1, 2, 3, 4, 5];
+let first = arr[0];
+let len = arr.len();
+
+// 注意：越界访问在运行时 panic，不是 undefined！
+```
+
+---
+
+## 函数
+
+```rust
+// fn 关键字，参数必须标注类型
+fn add(a: i32, b: i32) -> i32 {
+    a + b  // 无分号 = 隐式返回（表达式）
+}
+
+// 等价于：
+fn add_explicit(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+// 无返回值（返回 unit 类型 ()，类似 JS 的 void）
+fn greet(name: &str) {
+    println!("Hello, {name}!");
+}
+```
+
+<Callout type="insight">
+  **表达式 vs 语句**：Rust 区分两者。没有分号的表达式是返回值；有分号的是语句（返回 `()`）。这让 `if` / `match` 都能直接作为值使用。
+</Callout>
+
+### 闭包
+
+```rust
+// Rust 闭包类似 JS 箭头函数
+let double = |x| x * 2;
+let add = |a, b| a + b;
+
+// 捕获环境（move 关键字强制转移所有权）
+let factor = 3;
+let multiply = |x| x * factor; // 借用 factor
+
+// 用于迭代器，非常惯用
+let numbers = vec![1, 2, 3, 4, 5];
+let doubled: Vec<i32> = numbers.iter().map(|x| x * 2).collect();
+let evens: Vec<&i32> = numbers.iter().filter(|x| *x % 2 == 0).collect();
+```
+
+---
+
+## 控制流
+
+### if 表达式
+
+```rust
+// Rust 的 if 是表达式，可以直接赋值
+let number = 7;
+let description = if number % 2 == 0 { "偶数" } else { "奇数" };
+println!("{number} 是{description}");
+
+// 类比 JS 三元运算符：number % 2 === 0 ? "偶数" : "奇数"
+```
+
+### match：比 switch 强大得多
+
+```rust
+let code = 200_u32;
+let status = match code {
+    200 => "OK",
+    404 => "Not Found",
+    500 => "Server Error",
+    400..=499 => "Client Error",  // 范围匹配
+    _ => "Unknown",               // 通配符，必须穷举
+};
+
+// match 在枚举上的威力
+#[derive(Debug)]
+enum Shape { Circle(f64), Rectangle(f64, f64) }
+
+let shape = Shape::Circle(3.0);
+let area = match shape {
+    Shape::Circle(r) => std::f64::consts::PI * r * r,
+    Shape::Rectangle(w, h) => w * h,
+};
+```
+
+### loop / while / for
+
+```rust
+// loop = 无限循环，可以返回值
+let result = loop {
+    let x = do_something();
+    if x > 10 { break x * 2; } // break 携带值
+};
+
+// while
+let mut i = 0;
+while i < 5 { i += 1; }
+
+// for...in（最惯用的遍历方式）
+for item in &[1, 2, 3] {
+    println!("{item}");
+}
+
+// 带索引
+for (i, item) in ["a", "b", "c"].iter().enumerate() {
+    println!("{i}: {item}");
+}
+```
+
+---
+
+## 实战项目：TODO CLI 工具
+
+<ProjectCard
+  title="TODO CLI 工具"
+  description="用 Rust 构建一个功能完整的命令行 TODO 管理器，巩固本章所有基础概念。"
+  skills={["Vec 操作", "match 模式匹配", "结构体", "枚举", "标准输入输出"]}
+  command="cargo new todo-cli && cd todo-cli"
+  difficulty="初级"
+  estimatedTime="45 分钟"
+/>
+
+```rust
+// src/main.rs — 完整 TODO CLI 实现
+use std::io::{self, BufRead};
+
+#[derive(Debug)]
+struct Todo {
+    id: usize,
+    text: String,
+    done: bool,
+}
+
+fn main() {
+    let mut todos: Vec<Todo> = Vec::new();
+    let mut next_id = 1_usize;
+    let stdin = io::stdin();
+
+    println!("📝 Rust TODO CLI");
+    println!("命令: add <内容> | done <id> | list | quit");
+
+    for line in stdin.lock().lines() {
+        let line = line.unwrap();
+        let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
+
+        match parts.as_slice() {
+            ["add", text] => {
+                todos.push(Todo { id: next_id, text: text.to_string(), done: false });
+                println!("✓ 已添加 #{next_id}: {text}");
+                next_id += 1;
+            }
+            ["done", id_str] => {
+                if let Ok(id) = id_str.parse::<usize>() {
+                    if let Some(todo) = todos.iter_mut().find(|t| t.id == id) {
+                        todo.done = true;
+                        println!("✓ 完成 #{id}: {}", todo.text);
+                    } else {
+                        println!("✗ 未找到 #{id}");
+                    }
+                }
+            }
+            ["list"] => {
+                if todos.is_empty() {
+                    println!("（空）");
+                }
+                for todo in &todos {
+                    let mark = if todo.done { "✓" } else { "○" };
+                    println!("{mark} #{}: {}", todo.id, todo.text);
+                }
+            }
+            ["quit"] => break,
+            _ => println!("未知命令，输入 list / add <内容> / done <id> / quit"),
+        }
+    }
+}
+```
+
+<Callout type="tip">
+  运行 `cargo run`，然后试试 `add 学习 Rust`、`list`、`done 1`。  
+  注意 `match parts.as_slice()` 的威力——模式直接解构切片，比 JS 的 `if/else if` 链优雅得多。
+</Callout>
+
+---
+
+## 实战视频
+
+<VideoPlaceholder
+  title="Rust 基础：变量、类型、函数、match"
+  duration="1 分钟精讲"
+  description="从 JS 视角出发，演示 Rust 基础语法。"
+  src="/videos/ch01-basics.mp4"
+  subtitles="/subtitles/ch01-basics.vtt"
+/>
+
+---
+
+## 本章小结
+
+你已经掌握了：
+
+- ✓ 变量的不可变性与 `mut` / shadowing
+- ✓ 基础类型系统和类型推断
+- ✓ 函数、闭包、表达式 vs 语句
+- ✓ `match` 模式匹配
+- ✓ 迭代器基础
+
+下一章：[所有权与借用](/chapter/ownership)——Rust 最核心的革命性概念，用内存动画看见它。

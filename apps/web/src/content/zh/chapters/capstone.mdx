@@ -1,0 +1,275 @@
+export const frontmatter = {
+  title: "最终实战：AI 驱动的全栈服务",
+  subtitle: "综合 Web · DB · 运维 · AI 的生产级应用",
+  chapter: 20,
+  slug: "capstone",
+  duration: "10 小时",
+  project: "CodeForge — AI 代码审查平台",
+  status: "available",
+  description: "综合 20 章所有技能，构建一个具备 RAG 智能搜索、代码审查 AI、实时通知、完整 CI/CD、K8s 部署、可观测性的生产级 Rust 全栈 + AI 平台。",
+  prev: "ai-ops",
+  next: null,
+};
+
+import { ChapterHero } from "@/components/chapters/ChapterHero";
+import { Callout } from "@/components/chapters/Callout";
+import { ProjectCard } from "@/components/chapters/ProjectCard";
+import { VideoPlaceholder } from "@/components/chapters/VideoPlaceholder";
+import { CompareBlock } from "@/components/chapters/CompareBlock";
+
+<ChapterHero frontmatter={frontmatter} />
+
+## 项目愿景
+
+**CodeForge** 是一个 AI 驱动的代码审查平台，整合了本课程所有核心能力：
+
+- 提交代码后，AI 自动审查安全漏洞、性能问题、代码风格
+- RAG 系统检索历史审查记录，避免重复错误
+- 实时 WebSocket 推送审查进度
+- 完整的用户系统、权限控制、团队协作
+- 一键 K8s 部署，Grafana 监控，自动扩缩容
+
+## 完整技术栈
+
+```
+CodeForge 技术栈
+│
+├── 前端：Next.js 15
+│   ├── React Server Components
+│   ├── TanStack Query（数据获取）
+│   ├── WebSocket（实时推送）
+│   └── Monaco Editor（代码编辑器）
+│
+├── 后端：Rust + Axum
+│   ├── REST API（CRUD）
+│   ├── WebSocket（实时通知）
+│   ├── AI 网关（多模型路由）
+│   └── 后台任务队列（tokio）
+│
+├── 数据层
+│   ├── PostgreSQL（主数据库 + pgvector 向量存储）
+│   ├── Redis（缓存 + 会话 + 任务队列）
+│   └── S3/R2（代码文件存储）
+│
+├── AI
+│   ├── Embedding 模型（代码向量化）
+│   ├── LLM（GPT-4o / Claude 3.5 代码审查）
+│   └── RAG（检索增强生成）
+│
+└── 运维
+    ├── GitHub Actions CI/CD
+    ├── Kubernetes + Helm
+    ├── Prometheus + Grafana
+    └── OpenTelemetry 链路追踪
+```
+
+## 核心功能：RAG 代码审查
+
+````rust
+// crates/review/src/rag.rs
+pub struct CodeReviewEngine {
+    llm: Arc<dyn LlmClient>,
+    embedder: Arc<dyn EmbeddingClient>,
+    db: PgPool,
+}
+
+impl CodeReviewEngine {
+    pub async fn review(&self, submission: &CodeSubmission) -> ReviewResult {
+        // 1. 将代码向量化
+        let code_embedding = self.embedder
+            .embed(&submission.code)
+            .await?;
+
+        // 2. 检索相似的历史审查记录（RAG）
+        let similar_reviews = sqlx::query_as!(
+            SimilarReview,
+            r#"
+            SELECT content, score, review_type,
+                   1 - (embedding <=> $1::vector) as similarity
+            FROM code_reviews
+            WHERE 1 - (embedding <=> $1::vector) > 0.7
+            ORDER BY similarity DESC
+            LIMIT 5
+            "#,
+            &code_embedding as &[f32]
+        )
+        .fetch_all(&self.db)
+        .await?;
+
+        // 3. 构造 RAG prompt
+        let context = similar_reviews
+            .iter()
+            .map(|r| format!("历史案例（相似度 {:.0}%）:\n{}", r.similarity * 100.0, r.content))
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+
+        let prompt = format!(r#"
+你是一个专业的 Rust 代码审查员。基于以下历史审查案例作为参考：
+
+{context}
+
+请审查以下代码，重点关注：
+1. 内存安全（所有权、借用、生命周期）
+2. 并发安全（数据竞争、死锁风险）
+3. 错误处理（是否正确传播错误）
+4. 性能问题（不必要的克隆、阻塞调用）
+
+代码：
+```rust
+{code}
+```
+        "#, context = context, code = submission.code);
+
+        // 4. 流式调用 LLM
+        let review_stream = self.llm.stream_chat(vec![
+            Message::system("你是专业 Rust 代码审查员"),
+            Message::user(&prompt),
+        ]).await?;
+
+        // 5. 存储审查结果和 embedding 供未来 RAG 检索
+        let review_text = collect_stream(review_stream).await;
+        self.store_review(&submission.code, &review_text, &code_embedding).await?;
+
+        ReviewResult { content: review_text, similar_cases: similar_reviews }
+    }
+}
+````
+
+## 实时进度推送
+
+```rust
+// WebSocket 推送审查进度
+#[derive(Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum ReviewEvent {
+    Started { submission_id: Uuid },
+    Analyzing { step: &'static str, progress: u8 },
+    ChunkReceived { content: String },
+    Completed { review_id: Uuid, score: f32 },
+    Failed { error: String },
+}
+
+pub async fn process_review_job(
+    submission: CodeSubmission,
+    ws_tx: broadcast::Sender<ReviewEvent>,
+    engine: Arc<CodeReviewEngine>,
+) {
+    let _ = ws_tx.send(ReviewEvent::Started { submission_id: submission.id });
+
+    let _ = ws_tx.send(ReviewEvent::Analyzing {
+        step: "检索相似案例",
+        progress: 20,
+    });
+
+    // ... 审查过程中持续推送进度 ...
+
+    match engine.review(&submission).await {
+        Ok(result) => {
+            let _ = ws_tx.send(ReviewEvent::Completed {
+                review_id: result.id,
+                score: result.score,
+            });
+        }
+        Err(e) => {
+            let _ = ws_tx.send(ReviewEvent::Failed { error: e.to_string() });
+        }
+    }
+}
+```
+
+## CI/CD 全流程
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: test }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2   # 缓存编译产物
+      - run: cargo test --workspace
+
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: 滚动发布到 K8s
+        run: |
+          kubectl set image deployment/codeforge-api \
+            api=ghcr.io/${{ github.repository }}:${{ github.sha }}
+          kubectl rollout status deployment/codeforge-api --timeout=5m
+```
+
+## 部署检查清单
+
+在上线前确认以下所有项目已完成：
+
+```
+✅ 语言基础
+  - 所有权规则、借用检查通过
+  - 错误处理：所有 Result 正确传播，无 unwrap() 在生产路径
+
+✅ 工程质量
+  - cargo clippy 零警告
+  - cargo test --workspace 全部通过
+  - 集成测试覆盖核心 API 路径
+
+✅ 安全
+  - 密码 Argon2id 哈希（绝不存明文）
+  - JWT 使用强随机 secret，定期轮换
+  - SQL 参数化查询（绝不拼接 SQL）
+  - 速率限制覆盖认证路由
+  - 依赖审计：cargo audit 零高危漏洞
+
+✅ 运维就绪
+  - /health 和 /ready 端点已实现
+  - Prometheus 指标已暴露
+  - 结构化日志（JSON 格式，含 trace_id）
+  - 优雅关闭（SIGTERM 处理）
+  - 资源限制（CPU/内存 requests/limits）
+
+✅ AI 系统
+  - LLM API key 通过 K8s Secret 注入
+  - 模型调用有超时和重试逻辑
+  - Token 成本追踪已启用
+  - RAG 向量索引已预热
+```
+
+<Callout type="insight">
+这份检查清单是从生产事故中总结的。每一项都对应一个真实的故障场景：忘记速率限制导致账号被盗用账单暴涨，忘加 /ready 导致 K8s 将流量路由到未初始化的实例，SQL 拼接导致注入……把它变成你团队的 PR 合并门控。
+</Callout>
+
+<VideoPlaceholder
+  title="CodeForge 完整演示"
+  description="10 小时终章实战录像：从空 workspace 到上线的完整过程。RAG 代码审查、WebSocket 实时推送、GitHub Actions 自动部署、K8s 监控面板全程记录。"
+/>
+
+<ProjectCard
+  title="CodeForge — AI 代码审查平台"
+  description="20 章的终极综合项目。Rust Axum 后端 + Next.js 前端 + PostgreSQL + pgvector RAG + LLM 代码审查 + WebSocket 实时推送 + GitHub Actions CI/CD + Kubernetes 部署 + Prometheus + Grafana 监控。这是你的 Rust 全栈工程师毕业作品。"
+  skills={["全栈架构", "RAG", "WebSocket", "K8s", "CI/CD", "监控", "AI 集成"]}
+  startCommand="git clone https://github.com/rustforge/codeforge && cd codeforge && make setup"
+/>
