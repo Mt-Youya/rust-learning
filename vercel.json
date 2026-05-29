@@ -1,5 +1,0 @@
-{
-  "buildCommand": "pnpm --filter web build",
-  "outputDirectory": "apps/web/",
-  "installCommand": "pnpm install"
-}
