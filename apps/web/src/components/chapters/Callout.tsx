@@ -3,7 +3,7 @@ import { Lightbulb, Info, AlertTriangle, Zap } from "lucide-react";
 
 type CalloutType = "tip" | "insight" | "warning" | "note";
 
-const styles: Record<CalloutType, { border: string; bg: string; icon: string; Icon: React.ElementType }> = {
+const styles: Record<CalloutType, { border: string; bg: string; icon: string; Icon: React.ComponentType<{ className: string }> }> = {
   tip: {
     border: "border-[oklch(0.64_0.17_148_/_0.4)]",
     bg: "bg-[oklch(0.64_0.17_148_/_0.06)]",
